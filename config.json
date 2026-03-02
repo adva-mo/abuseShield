@@ -1,0 +1,16 @@
+{
+  "listen_addr": ":8080",
+  "upstream_url": "http://localhost:8081",
+  "ip_rate_per_sec": 10.0,
+  "ip_burst": 20,
+  "key_rate_per_sec": 100.0,
+  "key_burst": 200,
+  "hot_key_multiplier": 3.0,
+  "cooldown_seconds": 60,
+  "eviction_interval_seconds": 60,
+  "max_idle_conns_per_host": 256,
+  "dial_timeout_seconds": 5,
+  "tls_handshake_timeout_seconds": 10,
+  "read_header_timeout_seconds": 5,
+  "write_timeout_seconds": 60
+}

@@ -1,0 +1,9 @@
+# binary (root-level only)
+/abuseshield
+
+# Go build cache
+*.test
+*.out
+
+# macOS
+.DS_Store
