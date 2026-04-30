@@ -24,5 +24,11 @@
   "entity_rate_per_sec": 2.5,
   "entity_burst": 5,
   "entity_burst_window_sec": 2.0,
-  "event_buffer_size": 1000
+  "event_buffer_size": 1000,
+
+  "allowlist": {
+    "ips":      ["10.0.0.0/8", "192.168.1.50"],
+    "paths":    ["/health", "/internal/"],
+    "api_keys": ["internal-service-key"]
+  }
 }
