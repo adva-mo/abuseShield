@@ -49,17 +49,18 @@ func NewTransport(maxIdleConnsPerHost int, dialTimeout, tlsTimeout time.Duration
 }
 
 // ExtractClientIP returns the real client IP from the request.
-// It uses the leftmost entry of X-Forwarded-For (the original client),
-// falling back to RemoteAddr for direct connections.
+// AbuseShield sits behind a trusted load balancer, so the rightmost entry in
+// X-Forwarded-For is the IP the LB observed — it cannot be spoofed by the
+// client. The leftmost entries are client-controlled and must not be trusted.
 func ExtractClientIP(r *http.Request) string {
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		// Leftmost entry is the original client; subsequent entries are proxies.
-		if idx := strings.IndexByte(xff, ','); idx != -1 {
-			return strings.TrimSpace(xff[:idx])
+		// Rightmost entry is appended by the trusted load balancer.
+		if idx := strings.LastIndexByte(xff, ','); idx != -1 {
+			return strings.TrimSpace(xff[idx+1:])
 		}
 		return strings.TrimSpace(xff)
 	}
-	// Direct connection: strip port from RemoteAddr.
+	// No XFF header: direct connection, use RemoteAddr.
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

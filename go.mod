@@ -1,3 +1,3 @@
-module github.com/abuseshield/lite
+module github.com/adva-mo/abuseShield
 
 go 1.22

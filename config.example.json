@@ -1,16 +1,28 @@
 {
   "listen_addr": ":8080",
-  "upstream_url": "http://localhost:8081",
+  "upstream_url": "http://localhost:9090",
+
   "ip_rate_per_sec": 10.0,
   "ip_burst": 20,
   "key_rate_per_sec": 100.0,
   "key_burst": 200,
   "hot_key_multiplier": 3.0,
   "cooldown_seconds": 60,
+
   "eviction_interval_seconds": 60,
   "max_idle_conns_per_host": 256,
   "dial_timeout_seconds": 5,
   "tls_handshake_timeout_seconds": 10,
   "read_header_timeout_seconds": 5,
-  "write_timeout_seconds": 60
+  "write_timeout_seconds": 60,
+
+  "shadow_mode": true,
+  "block_on_suspicious": false,
+  "kill_switch": false,
+  "kill_switch_secret": "REPLACE_WITH_A_STRONG_RANDOM_SECRET",
+
+  "entity_rate_per_sec": 2.5,
+  "entity_burst": 5,
+  "entity_burst_window_sec": 2.0,
+  "event_buffer_size": 1000
 }

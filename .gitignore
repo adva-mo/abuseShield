@@ -1,9 +1,37 @@
-# binary (root-level only)
+# ── Compiled binaries ──────────────────────────────────────────────────────
 /abuseshield
+abuseshield.exe
 
-# Go build cache
+# ── Go toolchain artifacts ──────────────────────────────────────────────────
 *.test
 *.out
+/vendor/
+/dist/
 
-# macOS
+# ── Config with secrets ─────────────────────────────────────────────────────
+# Copy config.example.json → config.json and fill in your values.
+# Never commit config.json — it may contain real secrets (kill_switch_secret etc).
+config.json
+
+# ── Runtime / log files ─────────────────────────────────────────────────────
+*.log
+
+# ── AI tooling (project-local) ──────────────────────────────────────────────
+.claude/
+
+# ── macOS ───────────────────────────────────────────────────────────────────
 .DS_Store
+.AppleDouble
+.LSOverride
+
+# ── Editor / IDE ────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── Environment files ───────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example

@@ -5,14 +5,20 @@ import (
 	"sync/atomic"
 )
 
-const numShards = 256
+const (
+	numShards     = 256
+	// minHotSamples is the minimum number of allowed requests within a 1-second
+	// window before hot-key cooldown can activate. Prevents short legitimate
+	// bursts from triggering cooldown.
+	minHotSamples = 50
+)
 
 // bucket is the per-key token-bucket state.
 type bucket struct {
 	tokens      float64 // current token count
 	lastRefill  int64   // UnixNano of last refill
 	windowStart int64   // UnixNano — start of current 1-second hot-key window
-	windowCount int64   // all attempts (allowed + denied) in current window
+	windowCount int64   // allowed requests in current window (blocked requests excluded)
 	blocked     bool    // true when in hot-key cooldown
 	blockUntil  int64   // UnixNano when cooldown expires
 }
@@ -47,8 +53,10 @@ func shardIndex(k string) uint8 {
 // allow checks and updates the token bucket for key in the given shard array.
 // rate is tokens/sec, burst is max tokens, hotMul is the hot-key multiplier,
 // cooldownNs is cooldown duration in nanoseconds, now is current UnixNano.
-// Returns (allowed bool, retryAfterMs int64).
-func allow(shards *[numShards]shard, key string, rate, burst, hotMul float64, cooldownNs, now int64) (bool, int64) {
+// Returns (allowed bool, retryAfterMs int64, reason string).
+// reason is "" when allowed, "cooldown" when in hot-key cooldown, "token" when
+// the token bucket is exhausted. Callers map "token" to a keyspace-specific label.
+func allow(shards *[numShards]shard, key string, rate, burst, hotMul float64, cooldownNs, now int64) (bool, int64, string) {
 	idx := shardIndex(key)
 	sh := &shards[idx]
 
@@ -67,11 +75,7 @@ func allow(shards *[numShards]shard, key string, rate, burst, hotMul float64, co
 		sh.keys[key] = b
 		sh.mu.Unlock()
 		sh.size.Add(1)
-		// Re-lock to proceed — but since we just created with full tokens, allow immediately.
-		// Actually we should just return allowed directly.
-		// Re-acquire to properly account (metrics will be updated by caller).
-		// For simplicity: new key with full burst → allowed.
-		return true, 0
+		return true, 0, ""
 	}
 
 	// Fast path: check cooldown block first.
@@ -79,7 +83,7 @@ func allow(shards *[numShards]shard, key string, rate, burst, hotMul float64, co
 		if now < b.blockUntil {
 			retryMs := (b.blockUntil - now) / 1e6
 			sh.mu.Unlock()
-			return false, retryMs
+			return false, retryMs, "cooldown"
 		}
 		// Cooldown expired — unblock and reset.
 		b.blocked = false
@@ -95,25 +99,9 @@ func allow(shards *[numShards]shard, key string, rate, burst, hotMul float64, co
 	}
 	b.lastRefill = now
 
-	// Update hot-key window (fixed 1-second window).
-	if now-b.windowStart >= 1_000_000_000 {
-		b.windowStart = now
-		b.windowCount = 0
-	}
-	b.windowCount++
-
-	// Hot-key detection: if all attempts in the window exceed hotMul * rate, block.
-	if float64(b.windowCount) > hotMul*rate {
-		b.blocked = true
-		b.blockUntil = now + cooldownNs
-		retryMs := cooldownNs / 1e6
-		sh.mu.Unlock()
-		return false, retryMs
-	}
-
-	// Token bucket: consume one token.
+	// Token bucket: fail fast before touching hot-key counters.
+	// Blocked-by-exhaustion requests must not count toward hot-key detection.
 	if b.tokens < 1.0 {
-		// No tokens — compute retry time.
 		deficit := 1.0 - b.tokens
 		retryNs := int64(deficit / rate * 1e9)
 		retryMs := retryNs / 1e6
@@ -121,12 +109,36 @@ func allow(shards *[numShards]shard, key string, rate, burst, hotMul float64, co
 			retryMs = 1
 		}
 		sh.mu.Unlock()
-		return false, retryMs
+		return false, retryMs, "token"
 	}
 
+	// Update hot-key window (fixed 1-second window).
+	if now-b.windowStart >= 1_000_000_000 {
+		b.windowStart = now
+		b.windowCount = 0
+	}
+
+	// Hot-key detection: check whether admitting this request would push
+	// the allowed-request count over the threshold. windowCount is only
+	// incremented for requests that are actually allowed, so both conditions
+	// must hold to avoid false positives on short bursts.
+	nextAllowed := b.windowCount + 1
+	if float64(nextAllowed) > hotMul*rate && nextAllowed >= minHotSamples {
+		b.blocked = true
+		b.blockUntil = now + cooldownNs
+		retryMs := (b.blockUntil - now) / 1e6
+		if retryMs < 0 {
+			retryMs = 0
+		}
+		sh.mu.Unlock()
+		return false, retryMs, "cooldown"
+	}
+
+	// Allow: count this request and consume the token.
+	b.windowCount++
 	b.tokens--
 	sh.mu.Unlock()
-	return true, 0
+	return true, 0, ""
 }
 
 // evictExpired removes stale buckets from a single shard.

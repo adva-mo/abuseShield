@@ -23,46 +23,42 @@ type Limiter struct {
 	ipBurst   float64
 	keyRate   float64
 	keyBurst  float64
-	hotMul    float64
-	cooldownNs int64
+	hotMul   float64
+	cooldown time.Duration
 }
 
 // New creates a Limiter with the given parameters.
-func New(ipRate, ipBurst, keyRate, keyBurst, hotMul float64, cooldownNs int64) *Limiter {
+func New(ipRate, ipBurst, keyRate, keyBurst, hotMul float64, cooldown time.Duration) *Limiter {
 	return &Limiter{
-		ipRate:     ipRate,
-		ipBurst:    ipBurst,
-		keyRate:    keyRate,
-		keyBurst:   keyBurst,
-		hotMul:     hotMul,
-		cooldownNs: cooldownNs,
+		ipRate:   ipRate,
+		ipBurst:  ipBurst,
+		keyRate:  keyRate,
+		keyBurst: keyBurst,
+		hotMul:   hotMul,
+		cooldown: cooldown,
 	}
 }
 
 // CheckIP checks whether the given IP address is allowed.
 func (l *Limiter) CheckIP(ip string, now int64) Decision {
-	ok, retryMs := allow(&l.ipShards, ip, l.ipRate, l.ipBurst, l.hotMul, l.cooldownNs, now)
+	ok, retryMs, reason := allow(&l.ipShards, ip, l.ipRate, l.ipBurst, l.hotMul, int64(l.cooldown), now)
 	if ok {
 		return Decision{Allowed: true}
 	}
-	reason := "ip"
-	// Distinguish cooldown from token-exhaustion by checking retryMs magnitude.
-	// If retryMs >= cooldownNs/1e6 - 1000 (within 1 second of full cooldown), it's a cooldown block.
-	if retryMs >= l.cooldownNs/1e6-1000 {
-		reason = "cooldown"
+	if reason == "token" {
+		reason = "ip"
 	}
 	return Decision{Allowed: false, RetryAfterMs: retryMs, Reason: reason}
 }
 
 // CheckKey checks whether the given API key is allowed.
 func (l *Limiter) CheckKey(key string, now int64) Decision {
-	ok, retryMs := allow(&l.keyShards, key, l.keyRate, l.keyBurst, l.hotMul, l.cooldownNs, now)
+	ok, retryMs, reason := allow(&l.keyShards, key, l.keyRate, l.keyBurst, l.hotMul, int64(l.cooldown), now)
 	if ok {
 		return Decision{Allowed: true}
 	}
-	reason := "api_key"
-	if retryMs >= l.cooldownNs/1e6-1000 {
-		reason = "cooldown"
+	if reason == "token" {
+		reason = "api_key"
 	}
 	return Decision{Allowed: false, RetryAfterMs: retryMs, Reason: reason}
 }

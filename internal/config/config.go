@@ -26,16 +26,35 @@ type Config struct {
 	TLSHandshakeTimeoutSeconds      float64 `json:"tls_handshake_timeout_seconds"`
 	ReadHeaderTimeoutSeconds        float64 `json:"read_header_timeout_seconds"`
 	WriteTimeoutSeconds             float64 `json:"write_timeout_seconds"`
+
+	// Abuse detection engine settings.
+	// ShadowMode uses *bool so the JSON zero-value (false) is distinguishable
+	// from "not set", allowing the default to be true.
+	ShadowMode      *bool  `json:"shadow_mode"`
+	KillSwitch       bool  `json:"kill_switch"`
+	KillSwitchSecret string `json:"kill_switch_secret"`
+	// EntityRatePerSec / EntityBurst / EntityBurstWindowSec control the L1
+	// token-bucket rate limiter applied per EntityID (not per raw IP).
+	EntityRatePerSec    float64 `json:"entity_rate_per_sec"`
+	EntityBurst         float64 `json:"entity_burst"`
+	EntityBurstWindowSec float64 `json:"entity_burst_window_sec"`
+	// EventBufferSize is the capacity of the async SecurityEvent log channel.
+	EventBufferSize int `json:"event_buffer_size"`
+	// BlockOnSuspicious: when true and shadow_mode is false, SUSPICIOUS decisions
+	// (e.g. sequence_violation) also block the request. Defaults to false so
+	// sequence detection can be observed in shadow mode before enforcement.
+	BlockOnSuspicious bool `json:"block_on_suspicious"`
 }
 
 // Derived durations (populated by Load).
 type Derived struct {
-	CooldownNs       int64
+	Cooldown         time.Duration
 	EvictionInterval time.Duration
 	DialTimeout      time.Duration
 	TLSTimeout       time.Duration
 	ReadHeaderTimeout time.Duration
 	WriteTimeout     time.Duration
+	EntityBurstWindow time.Duration
 }
 
 func Load(path string) (*Config, *Derived, error) {
@@ -93,13 +112,35 @@ func Load(path string) (*Config, *Derived, error) {
 		cfg.WriteTimeoutSeconds = 60
 	}
 
+	// Abuse detection defaults.
+	if cfg.ShadowMode == nil {
+		t := true
+		cfg.ShadowMode = &t
+	}
+	if cfg.KillSwitchSecret == "" {
+		cfg.KillSwitchSecret = "change-me"
+	}
+	if cfg.EntityRatePerSec <= 0 {
+		cfg.EntityRatePerSec = 2.5
+	}
+	if cfg.EntityBurst <= 0 {
+		cfg.EntityBurst = 5
+	}
+	if cfg.EntityBurstWindowSec <= 0 {
+		cfg.EntityBurstWindowSec = 2.0
+	}
+	if cfg.EventBufferSize <= 0 {
+		cfg.EventBufferSize = 1000
+	}
+
 	d := &Derived{
-		CooldownNs:        int64(cfg.CooldownSeconds * 1e9),
+		Cooldown:          time.Duration(cfg.CooldownSeconds * float64(time.Second)),
 		EvictionInterval:  time.Duration(cfg.EvictionIntervalSeconds * float64(time.Second)),
 		DialTimeout:       time.Duration(cfg.DialTimeoutSeconds * float64(time.Second)),
 		TLSTimeout:        time.Duration(cfg.TLSHandshakeTimeoutSeconds * float64(time.Second)),
 		ReadHeaderTimeout: time.Duration(cfg.ReadHeaderTimeoutSeconds * float64(time.Second)),
 		WriteTimeout:      time.Duration(cfg.WriteTimeoutSeconds * float64(time.Second)),
+		EntityBurstWindow: time.Duration(cfg.EntityBurstWindowSec * float64(time.Second)),
 	}
 
 	return &cfg, d, nil

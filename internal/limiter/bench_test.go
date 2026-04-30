@@ -13,7 +13,7 @@ const (
 	testKeyRate  = 1000.0
 	testKeyBurst = 2000.0
 	testHotMul   = 3.0
-	testCooldown = int64(60 * time.Second)
+	testCooldown = 60 * time.Second
 )
 
 func newTestLimiter() *Limiter {
@@ -126,7 +126,7 @@ func BenchmarkHotKeyBlock(b *testing.B) {
 		tokens:     0,
 		lastRefill: now,
 		blocked:    true,
-		blockUntil: now + testCooldown,
+		blockUntil: now + int64(testCooldown),
 	}
 	sh.mu.Unlock()
 	sh.size.Add(1)
