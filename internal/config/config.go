@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"time"
+
+	"github.com/adva-mo/abuseShield/internal/allowlist"
 )
 
 // Config holds all runtime configuration loaded from config.json.
@@ -44,6 +46,10 @@ type Config struct {
 	// (e.g. sequence_violation) also block the request. Defaults to false so
 	// sequence detection can be observed in shadow mode before enforcement.
 	BlockOnSuspicious bool `json:"block_on_suspicious"`
+
+	// Allowlist defines trusted IPs/CIDRs, path prefixes, and API keys that
+	// bypass all detection layers (L0, L1, L2) and go straight to the upstream.
+	Allowlist allowlist.Config `json:"allowlist"`
 }
 
 // Derived durations (populated by Load).

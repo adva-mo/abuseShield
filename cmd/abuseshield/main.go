@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/adva-mo/abuseShield/internal/allowlist"
 	"github.com/adva-mo/abuseShield/internal/config"
 	"github.com/adva-mo/abuseShield/internal/engine"
 	"github.com/adva-mo/abuseShield/internal/limiter"
@@ -105,6 +106,12 @@ func main() {
 		rp.ServeHTTP(w, r)
 	})
 
+	// --- Allowlist: trusted sources that skip all detection ---
+	al, err := allowlist.New(cfg.Allowlist)
+	if err != nil {
+		log.Fatalf("allowlist: %v", err)
+	}
+
 	// --- Abuse detection interceptor wraps the inner handler ---
 	interceptor := middleware.New(
 		innerHandler,
@@ -132,8 +139,18 @@ func main() {
 	// Kill-switch control endpoint.
 	mux.Handle("/admin/kill-switch", killSwitchHandler(&killSwitch, cfg.KillSwitchSecret))
 
-	// All other paths flow through the abuse detection interceptor.
-	mux.Handle("/", interceptor)
+	// All other paths: allowlisted requests go straight to the upstream,
+	// everything else flows through the full detection interceptor.
+	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		clientIP := proxy.ExtractClientIP(r)
+		apiKey := r.Header.Get("X-API-Key")
+		if al.Match(clientIP, r.URL.Path, apiKey) {
+			metrics.AllowedTotal.Add(1)
+			rp.ServeHTTP(w, r)
+			return
+		}
+		interceptor.ServeHTTP(w, r)
+	}))
 
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,

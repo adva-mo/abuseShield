@@ -107,6 +107,9 @@ Copy `config.example.json` to `config.json`. All fields have safe defaults.
 | `ip_rate_per_sec` | `10` | L0 token refill rate per IP |
 | `ip_burst` | `20` | L0 max burst per IP |
 | `event_buffer_size` | `1000` | Async SecurityEvent log buffer depth |
+| `allowlist.ips` | `[]` | IPs or CIDRs that bypass all detection (e.g. `"10.0.0.0/8"`) |
+| `allowlist.paths` | `[]` | Path prefixes that bypass all detection (e.g. `"/health"`) |
+| `allowlist.api_keys` | `[]` | API keys that bypass all detection |
 
 ---
 
@@ -210,6 +213,9 @@ go test -bench=BenchmarkAllowDistributedKeys -benchtime=10s ./internal/limiter/
 
 ## Deployment Notes
 
+- Use `allowlist.ips` for trusted internal services or monitoring agents that should never be rate-limited or inspected. Supports exact IPs and CIDR ranges.
+- Use `allowlist.paths` for health-check or internal endpoints (e.g. `/health`, `/internal/`). Prefix-matched, so `/health` covers `/health/check` too.
+- Use `allowlist.api_keys` for internal service-to-service calls that carry a known key. Allowlisted requests skip L0, L1, and L2 entirely and go straight to the upstream.
 - AbuseShield is designed to sit **behind a trusted Load Balancer** that sets `X-Forwarded-For`. The proxy reads the leftmost XFF entry as the client IP.
 - The binary has **no external dependencies** — deploy as a single static binary.
 - SecurityEvents are written to **stdout as JSON lines**. Pipe to your log aggregator (`| fluentd`, `| vector`, etc.).
