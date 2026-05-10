@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/adva-mo/abuseShield/internal/engine"
+	"github.com/adva-mo/abuseShield/internal/metrics"
 	"github.com/adva-mo/abuseShield/internal/proxy"
 )
 
@@ -99,10 +100,22 @@ func (i *Interceptor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 6. Collect all fired signals and derive the primary decision.
 	decision, reason, confidence, signals := mergeDecisions(l1, l2)
 
-	// 7. Build the SecurityEvent. Blocked is set after we know enforcement outcome.
+	// 7. Resolve enforcement outcome.
 	ip24 := ip24CIDR(clientIP)
 	shouldBlock := decision == "BLOCK" || (decision == "SUSPICIOUS" && i.cfg.BlockOnSuspicious)
 	blocked := !i.cfg.ShadowMode && shouldBlock
+
+	// Update detection metrics. Detection counters fire regardless of shadow mode;
+	// BlockedTotal only increments when the request is actually rejected.
+	if !l1.Allowed && l1.Reason == "burst_detected" {
+		metrics.BlockedByBurst.Add(1)
+	}
+	if l2.Suspicious && l2.Reason == "sequence_violation" {
+		metrics.SuspiciousSeq.Add(1)
+	}
+	if blocked {
+		metrics.BlockedTotal.Add(1)
+	}
 
 	i.logger.Emit(engine.SecurityEvent{
 		Timestamp:  time.Unix(0, now).UTC().Format(time.RFC3339Nano),
