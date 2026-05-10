@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -70,7 +71,10 @@ func Load(path string) (*Config, *Derived, error) {
 	}
 
 	if cfg.ListenAddr == "" {
-		cfg.ListenAddr = ":8080"
+		cfg.ListenAddr = "8080"
+	}
+	if !strings.Contains(cfg.ListenAddr, ":") {
+		cfg.ListenAddr = ":" + cfg.ListenAddr
 	}
 	if cfg.UpstreamURL == "" {
 		return nil, nil, fmt.Errorf("upstream_url is required")

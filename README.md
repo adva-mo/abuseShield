@@ -8,41 +8,12 @@ Zero external dependencies. Sub-millisecond decision latency.
 
 ## How It Works
 
-Every request passes through a multi-layer detection pipeline before being forwarded to the upstream:
+Every request is fingerprinted into an **EntityID** (IP/24 + User-Agent) and passed through two detection layers before being forwarded:
 
-```
-Request
-  │
-  ├─ Kill-switch?          → bypass all detection, forward
-  │
-  ├─ L0: IP rate limiter   → 429 if IP exceeds token bucket
-  ├─ L0: API key limiter   → 429 if key exceeds token bucket
-  │
-  ├─ L1: Entity rate+burst → BLOCK  (burst_detected / rate_limited)
-  ├─ L2: Sequence check    → SUSPICIOUS (sequence_violation / velocity_violation /
-  │                                       repeated_registration / funnel_expired)
-  │
-  ├─ SecurityEvent logged  → JSON line to stdout (async, non-blocking)
-  │
-  └─ Forward to upstream   (always in shadow mode; blocked in enforcement mode)
-```
+- **L1** — token-bucket rate limiter + burst-window detection per entity
+- **L2** — signup funnel sequence check (`/home` → `/register`)
 
-### Detection Layers
-
-| Layer | Signal | Description | Confidence |
-|---|---|---|---|
-| L1 | `burst_detected` | Entity exceeds burst capacity within the window | 0.95 |
-| L1 | `rate_limited` | Entity token bucket exhausted (sustained drip) | 0.90 |
-| L2 | `sequence_violation` | `/register` hit without a prior `/home` visit | 0.70 |
-| L2 | `velocity_violation` | `/home` → `/register` faster than human-possible | 0.85 |
-| L2 | `repeated_registration` | Entity hit `/register` more than the allowed count | 0.75 |
-| L2 | `funnel_expired` | Prior `/home` visit expired before `/register` arrived | 0.65 |
-
-### Shadow Mode (default: on)
-
-In shadow mode every request is **forwarded to the upstream regardless of decision**. SecurityEvents are still logged. This lets you observe the detection engine in production before enabling enforcement.
-
-Set `"shadow_mode": false` in config to enable blocking.
+Detections are emitted as JSON **SecurityEvents** to stdout. In **shadow mode** (default) every request is still forwarded — you observe the signal before enabling enforcement.
 
 ---
 
@@ -51,7 +22,6 @@ Set `"shadow_mode": false` in config to enable blocking.
 ### Prerequisites
 
 - Go 1.22+
-- Python 3.6+ (for test scripts only)
 
 ### Build
 
@@ -65,27 +35,63 @@ go build -o abuseshield ./cmd/abuseshield/
 
 ```bash
 cp config.example.json config.json
-# Edit config.json:
-#   - Set upstream_url to your backend
-#   - Set kill_switch_secret to a strong random value
-#   - Leave shadow_mode: true until you're confident in the signal quality
 ```
+
+Then edit `config.json`:
+
+- Set `upstream_url` to your backend
+- Set `kill_switch_secret` to a strong random value
+- Leave `shadow_mode: true` until you're confident in the signal quality
 
 ### Run
 
 ```bash
-# Terminal 1 — mock upstream (or point to your real backend)
-python3 -m http.server 9090
+./abuseshield -config config.json
+```
 
-# Terminal 2 — AbuseShield
+#### Try it locally
+
+To simulate traffic against a mock backend:
+
+**Terminal 1** — mock upstream (accepts all HTTP methods, always returns 200)
+
+```bash
+python3 scripts/mock_upstream.py
+```
+
+**Terminal 2** — AbuseShield
+
+```bash
 ./abuseshield -config config.json 2>&1 | tee /tmp/shield.log
+```
 
-# Terminal 3 — simulate traffic
+**Terminal 3** — simulate bot and real-user flows
+
+```bash
 python3 scripts/test_abuse.py
+```
 
-# Inspect SecurityEvent logs
+Inspect SecurityEvent logs:
+
+```bash
 python3 scripts/print_events.py /tmp/shield.log
 ```
+
+### Test
+
+Run the full test suite (includes race detector):
+
+```bash
+go test -race ./...
+```
+
+Run only the end-to-end suite:
+
+```bash
+go test -race ./test/e2e/
+```
+
+The e2e suite spins up a real AbuseShield + upstream stack via `httptest` and covers: request proxying, IP rate limiting, XFF extraction and spoofing, API key limiting, hot-key cooldown, 429 response shape, and metrics counter accuracy — no mocks, no stubs.
 
 ---
 
@@ -95,7 +101,7 @@ Copy `config.example.json` to `config.json`. All fields have safe defaults.
 
 | Field | Default | Description |
 |---|---|---|
-| `listen_addr` | `:8080` | Address AbuseShield listens on |
+| `listen_addr` | `8080` | Address AbuseShield listens on |
 | `upstream_url` | — | **Required.** Backend to proxy to |
 | `shadow_mode` | `true` | Log detections without blocking |
 | `block_on_suspicious` | `false` | Also block SUSPICIOUS decisions (not just BLOCK) |
@@ -110,39 +116,11 @@ Copy `config.example.json` to `config.json`. All fields have safe defaults.
 
 ---
 
-## SecurityEvent Log Format
-
-Every request emits one JSON line to stdout:
-
-```json
-{
-  "timestamp": "2026-03-30T16:11:51.477Z",
-  "entity_id": "a3f2b1c4d5e6f708",
-  "ip": "198.51.100.0/24",
-  "user_agent": "python-bot/1.0",
-  "path": "/register",
-  "method": "POST",
-  "decision": "BLOCK",
-  "reason": "burst_detected",
-  "confidence": 0.95,
-  "signals": [
-    { "layer": "L1", "reason": "burst_detected",    "confidence": 0.95 },
-    { "layer": "L2", "reason": "sequence_violation", "confidence": 0.70 }
-  ],
-  "shadow_mode": false,
-  "blocked": true
-}
-```
-
-`signals` contains **all** detection rules that fired. `decision` and `reason` reflect the highest-priority signal. `blocked: true` means the request was rejected with HTTP 403 and **not forwarded** to the upstream.
-
----
-
 ## Admin Endpoints
 
 ### Kill-Switch
 
-Immediately disables all detection. Requests pass through without any L1/L2 checks. No SecurityEvents are logged while active.
+Immediately disables all detection. Requests pass through without any checks. No SecurityEvents are logged while active.
 
 ```bash
 # Enable
@@ -164,53 +142,9 @@ curl http://localhost:8080/metrics
 
 ---
 
-## Architecture
-
-```
-cmd/abuseshield/main.go       Entry point, HTTP server, graceful shutdown
-internal/
-  config/config.go            JSON config loader with defaults
-  engine/
-    entity.go                 EntityID: FNV-1a64(ip/24 + UA + TLS placeholder)
-    state.go                  256-shard entity state map (cache-line padded)
-    l1.go                     Token bucket + burst-window detection
-    l2.go                     Sequence / velocity / repeat detection
-    events.go                 SecurityEvent struct + async JSON logger
-  middleware/
-    interceptor.go            HTTP handler: kill-switch → L1 → L2 → log → proxy
-  limiter/                    L0 IP + API key token bucket (sharded, 256 shards)
-  metrics/metrics.go          Prometheus counters (atomic, zero-alloc hot path)
-  proxy/proxy.go              httputil.ReverseProxy wrapper + IP extraction
-scripts/
-  test_abuse.py               Simulate fake signup vs real user flows
-  print_events.py             Pretty-print SecurityEvent JSON lines
-```
-
-**Entity fingerprinting:** `FNV-1a64(ip/24 prefix | User-Agent | tls_fp_placeholder)` — zero heap allocations, 256-shard map with cache-line padding to prevent false sharing.
-
----
-
-## Development
-
-```bash
-# Build
-go build ./...
-
-# Vet
-go vet ./...
-
-# Tests (with race detector)
-go test -race ./...
-
-# Benchmarks (limiter hot path)
-go test -bench=BenchmarkAllowDistributedKeys -benchtime=10s ./internal/limiter/
-```
-
----
-
 ## Deployment Notes
 
-- AbuseShield is designed to sit **behind a trusted Load Balancer** that sets `X-Forwarded-For`. The proxy reads the leftmost XFF entry as the client IP.
+- AbuseShield is designed to sit **behind a trusted Load Balancer** that sets `X-Forwarded-For`. The proxy reads the rightmost XFF entry as the client IP.
 - The binary has **no external dependencies** — deploy as a single static binary.
 - SecurityEvents are written to **stdout as JSON lines**. Pipe to your log aggregator (`| fluentd`, `| vector`, etc.).
 - `config.json` may contain `kill_switch_secret` — **never commit it**. Use `config.example.json` as the template.

@@ -1,5 +1,5 @@
 {
-  "listen_addr": ":8080",
+  "listen_addr": "8080",
   "upstream_url": "http://localhost:9090",
 
   "ip_rate_per_sec": 10.0,

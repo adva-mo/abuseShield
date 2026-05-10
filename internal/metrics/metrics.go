@@ -15,8 +15,8 @@ var (
 	BlockedByCooldown atomic.Int64
 
 	// Abuse detection counters.
-	EventsLogged   atomic.Int64 // SecurityEvents successfully enqueued
-	EventsDropped  atomic.Int64 // SecurityEvents dropped (buffer full) — alias of engine.EventsDropped
+	EventsLogged  atomic.Int64 // SecurityEvents written to the log
+	EventsDropped atomic.Int64 // SecurityEvents dropped because the async buffer was full
 	BlockedByBurst atomic.Int64 // L1 burst_detected blocks
 	SuspiciousSeq  atomic.Int64 // L2 sequence_violation hits
 )
