@@ -45,6 +45,11 @@ type Config struct {
 	// (e.g. sequence_violation) also block the request. Defaults to false so
 	// sequence detection can be observed in shadow mode before enforcement.
 	BlockOnSuspicious bool `json:"block_on_suspicious"`
+	// FunnelGate / FunnelTarget define the L2 sequence check.
+	// A request to FunnelTarget without a prior FunnelGate visit triggers
+	// a sequence_violation. Defaults to "/home" → "/register".
+	FunnelGate   string `json:"funnel_gate"`
+	FunnelTarget string `json:"funnel_target"`
 }
 
 // Derived durations (populated by Load).
@@ -135,6 +140,12 @@ func Load(path string) (*Config, *Derived, error) {
 	}
 	if cfg.EventBufferSize <= 0 {
 		cfg.EventBufferSize = 1000
+	}
+	if cfg.FunnelGate == "" {
+		cfg.FunnelGate = "/home"
+	}
+	if cfg.FunnelTarget == "" {
+		cfg.FunnelTarget = "/register"
 	}
 
 	d := &Derived{

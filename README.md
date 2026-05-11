@@ -26,7 +26,7 @@ Detections are emitted as JSON **SecurityEvents** to stdout. In **shadow mode** 
 ### Build
 
 ```bash
-git clone https://github.com/your-org/AbuseShield.git
+git clone https://github.com/adva-mo/abuseShield.git
 cd AbuseShield
 go build -o abuseshield ./cmd/abuseshield/
 ```
@@ -120,6 +120,8 @@ Copy `config.example.json` to `config.json`. All fields have safe defaults.
 | `ip_rate_per_sec` | `10` | L0 token refill rate per IP |
 | `ip_burst` | `20` | L0 max burst per IP |
 | `event_buffer_size` | `1000` | Async SecurityEvent log buffer depth |
+| `funnel_gate` | `"/home"` | L2: path the user must visit first |
+| `funnel_target` | `"/register"` | L2: protected path — triggers `sequence_violation` if gate was not seen |
 
 ---
 

@@ -24,5 +24,8 @@
   "entity_rate_per_sec": 2.5,
   "entity_burst": 5,
   "entity_burst_window_sec": 2.0,
-  "event_buffer_size": 1000
+  "event_buffer_size": 1000,
+
+  "funnel_gate": "/home",
+  "funnel_target": "/register"
 }
