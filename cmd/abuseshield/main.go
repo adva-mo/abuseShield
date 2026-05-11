@@ -34,6 +34,10 @@ func main() {
 		log.Fatalf("invalid upstream_url: %v", err)
 	}
 
+	// Single context drives all eviction goroutines (L0 limiter + entity store).
+	evictCtx, evictCancel := context.WithCancel(context.Background())
+	defer evictCancel()
+
 	// --- Existing IP/API-key rate limiter (L0 protection, unchanged) ---
 	l := limiter.New(
 		cfg.IPRatePerSec,
@@ -43,7 +47,7 @@ func main() {
 		cfg.HotKeyMultiplier,
 		derived.Cooldown,
 	)
-	l.StartEviction(derived.EvictionInterval)
+	l.StartEviction(evictCtx, derived.EvictionInterval)
 
 	// --- Reverse proxy ---
 	transport := proxy.NewTransport(
@@ -55,10 +59,6 @@ func main() {
 
 	// --- Abuse detection engine ---
 	store := engine.NewStore()
-
-	// Use a context tied to process lifetime for the eviction goroutine.
-	evictCtx, evictCancel := context.WithCancel(context.Background())
-	defer evictCancel()
 	store.StartEviction(evictCtx, derived.EvictionInterval)
 
 	// SecurityEvent logger writes JSON lines to stdout.
