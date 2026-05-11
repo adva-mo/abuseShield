@@ -271,6 +271,7 @@ def print_metrics_summary() -> None:
 
     print("\n  Detection signals (L1/L2 — fire in shadow mode too)")
     show("burst_detected     (L1)", 'abuseshield_detected_by_reason_total{reason="burst_detected"}')
+    show("rate_limited       (L1)", 'abuseshield_detected_by_reason_total{reason="rate_limited"}')
     show("sequence_violation (L2)", 'abuseshield_detected_by_reason_total{reason="sequence_violation"}')
 
     print("\n  SecurityEvents")

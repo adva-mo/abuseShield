@@ -16,10 +16,11 @@ var (
 
 	// Abuse detection counters — fire on detection regardless of shadow mode.
 	// "Detected" means the signal fired; use BlockedTotal to count actual rejections.
-	EventsLogged   atomic.Int64 // SecurityEvents written to the log
-	EventsDropped  atomic.Int64 // SecurityEvents dropped because the async buffer was full
-	DetectedByBurst atomic.Int64 // L1 burst_detected signal fired
-	DetectedSeq     atomic.Int64 // L2 sequence_violation signal fired
+	EventsLogged        atomic.Int64 // SecurityEvents written to the log
+	EventsDropped       atomic.Int64 // SecurityEvents dropped because the async buffer was full
+	DetectedByBurst     atomic.Int64 // L1 burst_detected signal fired
+	DetectedByRateLimit atomic.Int64 // L1 rate_limited signal fired (slow persistent bots)
+	DetectedSeq         atomic.Int64 // L2 sequence_violation signal fired
 )
 
 // Sources carries the dynamic gauge callbacks needed by Handler.
@@ -42,6 +43,7 @@ func Handler(s Sources) http.HandlerFunc {
 		evLogged := EventsLogged.Load()
 		evDropped := EventsDropped.Load()
 		detByBurst := DetectedByBurst.Load()
+		detByRateLimit := DetectedByRateLimit.Load()
 		detSeq := DetectedSeq.Load()
 
 		var activeKeys, activeEntities int64
@@ -71,6 +73,7 @@ func Handler(s Sources) http.HandlerFunc {
 		fmt.Fprintf(w, "# HELP abuseshield_detected_by_reason_total Detection signals fired (increments in shadow mode too).\n")
 		fmt.Fprintf(w, "# TYPE abuseshield_detected_by_reason_total counter\n")
 		fmt.Fprintf(w, "abuseshield_detected_by_reason_total{reason=\"burst_detected\"} %d\n", detByBurst)
+		fmt.Fprintf(w, "abuseshield_detected_by_reason_total{reason=\"rate_limited\"} %d\n", detByRateLimit)
 		fmt.Fprintf(w, "abuseshield_detected_by_reason_total{reason=\"sequence_violation\"} %d\n\n", detSeq)
 
 		fmt.Fprintf(w, "# HELP abuseshield_security_events_total SecurityEvents emitted by the async logger.\n")
