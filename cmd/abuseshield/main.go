@@ -154,6 +154,10 @@ func main() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
 
+	if cfg.KillSwitchSecret == "change-me" {
+		log.Println("WARN: kill_switch_secret is set to the default value 'change-me' — set a strong secret in config.json")
+	}
+
 	go func() {
 		log.Printf("AbuseShield listening on %s → %s (shadow_mode=%v, kill_switch=%v)",
 			cfg.ListenAddr, cfg.UpstreamURL, *cfg.ShadowMode, cfg.KillSwitch)

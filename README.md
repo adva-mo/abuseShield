@@ -27,7 +27,7 @@ Detections are emitted as JSON **SecurityEvents** to stdout. In **shadow mode** 
 
 ```bash
 git clone https://github.com/adva-mo/abuseShield.git
-cd AbuseShield
+cd abuseShield
 go build -o abuseshield ./cmd/abuseshield/
 ```
 
