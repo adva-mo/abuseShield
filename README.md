@@ -149,10 +149,20 @@ curl -X POST "http://localhost:8080/admin/kill-switch?enable=false" \
 
 ### Metrics
 
-Prometheus-compatible plaintext metrics. Bypasses all rate limiting and detection.
+Prometheus-compatible plaintext metrics endpoint. Bypasses all rate limiting and detection. Point your Prometheus scraper here:
+
+```yaml
+# prometheus.yml
+- job_name: abuseshield
+  static_configs:
+    - targets: ["localhost:8080"]
+  metrics_path: /metrics
+```
+
+For human-readable output during local testing, use the included script instead:
 
 ```bash
-curl http://localhost:8080/metrics
+python3 scripts/print_metrics.py
 ```
 
 ---
