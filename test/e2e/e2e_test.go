@@ -14,11 +14,14 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/adva-mo/abuseShield/internal/engine"
 	"github.com/adva-mo/abuseShield/internal/limiter"
 	"github.com/adva-mo/abuseShield/internal/metrics"
+	"github.com/adva-mo/abuseShield/internal/middleware"
 	"github.com/adva-mo/abuseShield/internal/proxy"
 )
 
@@ -171,6 +174,7 @@ func resetMetrics() {
 	metrics.BlockedByAPIKey.Store(0)
 	metrics.BlockedByCooldown.Store(0)
 	metrics.DetectedByBurst.Store(0)
+	metrics.DetectedByRateLimit.Store(0)
 	metrics.DetectedSeq.Store(0)
 }
 
@@ -830,6 +834,386 @@ func TestRetryAfterMsPositive(t *testing.T) {
 	body := parse429Body(t, resp)
 	if body.RetryAfterMs < 1 {
 		t.Errorf("retry_after_ms: want >= 1, got %d", body.RetryAfterMs)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Metrics counter integration tests
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Interceptor (L1 / L2 engine) stack helper
+// ---------------------------------------------------------------------------
+
+// newInterceptorStack builds a full AbuseShield stack that mirrors main.go:
+// abuse-detection interceptor (L1/L2) → L0 limiter → reverse proxy.
+// Security events are written to io.Discard so tests stay silent.
+//
+// The returned *atomic.Bool is the live kill switch; tests can toggle it with
+// ks.Store(true/false) at runtime.
+func newInterceptorStack(
+	t *testing.T,
+	l0 shieldConfig,
+	entityRate, entityBurst float64,
+	burstWindowNs int64,
+	shadowMode, blockOnSuspicious bool,
+	funnelGate, funnelTarget string,
+	upstreamHandler http.Handler,
+) (shieldURL string, ks *atomic.Bool, cleanup func()) {
+	t.Helper()
+
+	upstream := httptest.NewServer(upstreamHandler)
+	u, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatalf("parse upstream URL: %v", err)
+	}
+
+	cooldown := time.Duration(l0.cooldownSec * float64(time.Second))
+	lim := limiter.New(l0.ipRate, l0.ipBurst, l0.keyRate, l0.keyBurst, l0.hotMul, cooldown)
+
+	transport := proxy.NewTransport(16, 5*time.Second, 10*time.Second)
+	rp := proxy.New(u, transport)
+
+	store := engine.NewStore()
+	evLogger := engine.NewLogger(64, io.Discard)
+
+	sm := shadowMode
+	innerHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		now := time.Now().UnixNano()
+		clientIP := proxy.ExtractClientIP(r)
+
+		if !sm {
+			ipDec := lim.CheckIP(clientIP, now)
+			if !ipDec.Allowed {
+				metrics.BlockedTotal.Add(1)
+				switch ipDec.Reason {
+				case "cooldown":
+					metrics.BlockedByCooldown.Add(1)
+				case "ip":
+					metrics.BlockedByIP.Add(1)
+				}
+				proxy.WriteRateLimitResponse(w, ipDec.RetryAfterMs)
+				return
+			}
+			if apiKey := r.Header.Get("X-API-Key"); apiKey != "" {
+				keyDec := lim.CheckKey(apiKey, now)
+				if !keyDec.Allowed {
+					metrics.BlockedTotal.Add(1)
+					switch keyDec.Reason {
+					case "cooldown":
+						metrics.BlockedByCooldown.Add(1)
+					case "api_key":
+						metrics.BlockedByAPIKey.Add(1)
+					}
+					proxy.WriteRateLimitResponse(w, keyDec.RetryAfterMs)
+					return
+				}
+			}
+		}
+
+		metrics.AllowedTotal.Add(1)
+		rp.ServeHTTP(w, r)
+	})
+
+	var killSwitch atomic.Bool
+	interceptor := middleware.New(
+		innerHandler,
+		store,
+		evLogger,
+		middleware.InterceptorConfig{
+			RatePerSec:        entityRate,
+			Burst:             entityBurst,
+			BurstWindowNs:     burstWindowNs,
+			ShadowMode:        shadowMode,
+			BlockOnSuspicious: blockOnSuspicious,
+			FunnelGate:        funnelGate,
+			FunnelTarget:      funnelTarget,
+		},
+		&killSwitch,
+	)
+
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", metrics.Handler(metrics.Sources{
+		ActiveLimiterKeys: lim.ActiveKeysCount,
+		ActiveEntities:    store.ActiveCount,
+	}))
+	mux.Handle("/", interceptor)
+
+	shield := httptest.NewServer(mux)
+	return shield.URL, &killSwitch, func() {
+		shield.Close()
+		upstream.Close()
+		evLogger.Close()
+	}
+}
+
+// doMethodRequest sends a request with explicit method, XFF, and User-Agent.
+func doMethodRequest(t *testing.T, shieldURL, method, path, xff, ua string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(method, shieldURL+path, nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	if xff != "" {
+		req.Header.Set("X-Forwarded-For", xff)
+	}
+	if ua != "" {
+		req.Header.Set("User-Agent", ua)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	return resp
+}
+
+// ---------------------------------------------------------------------------
+// Interceptor: X-AbuseShield-Decision header
+// ---------------------------------------------------------------------------
+
+// TestDecisionHeaderPresentOnAllow verifies that X-AbuseShield-Decision is
+// attached to every proxied response, even clean ALLOW decisions.
+func TestDecisionHeaderPresentOnAllow(t *testing.T) {
+	shieldURL, _, cleanup := newInterceptorStack(t,
+		relaxedCfg, 1000, 2000, int64(2*time.Second),
+		true, false, "/home", "/register",
+		echoHandler(http.StatusOK, "ok"),
+	)
+	defer cleanup()
+
+	resp := doMethodRequest(t, shieldURL, "GET", "/home", "10.7.0.1", "test-ua-allow")
+	defer drainClose(resp)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d", resp.StatusCode)
+	}
+	if dec := resp.Header.Get("X-AbuseShield-Decision"); dec != "ALLOW" {
+		t.Errorf("X-AbuseShield-Decision: want ALLOW, got %q", dec)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Interceptor: shadow mode
+// ---------------------------------------------------------------------------
+
+// TestShadowModeForwardsOnBlock verifies that in shadow mode, requests that
+// would be blocked by L1 burst_detected are still proxied to the upstream
+// (200 response), while the decision header still reports BLOCK.
+func TestShadowModeForwardsOnBlock(t *testing.T) {
+	// entityBurst=2 → 3rd request within the window triggers burst_detected.
+	shieldURL, _, cleanup := newInterceptorStack(t,
+		relaxedCfg, 1000, 2, int64(2*time.Second),
+		true /* shadow */, false, "/home", "/register",
+		echoHandler(http.StatusOK, "upstream-ok"),
+	)
+	defer cleanup()
+
+	const xff, ua = "10.7.1.1", "shadow-burst-ua"
+
+	doMethodRequest(t, shieldURL, "GET", "/home", xff, ua).Body.Close()
+	doMethodRequest(t, shieldURL, "GET", "/home", xff, ua).Body.Close()
+
+	// 3rd request: burst_detected, but shadow mode must proxy it.
+	resp := doMethodRequest(t, shieldURL, "GET", "/home", xff, ua)
+	defer drainClose(resp)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("shadow mode: want 200 (proxied despite BLOCK), got %d", resp.StatusCode)
+	}
+	if dec := resp.Header.Get("X-AbuseShield-Decision"); dec != "BLOCK" {
+		t.Errorf("X-AbuseShield-Decision: want BLOCK in shadow mode, got %q", dec)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Interceptor: enforce mode (non-shadow)
+// ---------------------------------------------------------------------------
+
+// TestEnforceModeL1BurstBlocks verifies that in non-shadow mode, an entity
+// that triggers L1 burst_detected receives a 403 with Decision=BLOCK.
+func TestEnforceModeL1BurstBlocks(t *testing.T) {
+	shieldURL, _, cleanup := newInterceptorStack(t,
+		relaxedCfg, 1000, 2, int64(2*time.Second),
+		false /* enforce */, false, "/home", "/register",
+		echoHandler(http.StatusOK, "ok"),
+	)
+	defer cleanup()
+
+	const xff, ua = "10.7.2.1", "enforce-burst-ua"
+
+	doMethodRequest(t, shieldURL, "GET", "/home", xff, ua).Body.Close()
+	doMethodRequest(t, shieldURL, "GET", "/home", xff, ua).Body.Close()
+
+	resp := doMethodRequest(t, shieldURL, "GET", "/home", xff, ua)
+	defer drainClose(resp)
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("enforce mode L1 burst: want 403, got %d", resp.StatusCode)
+	}
+	if dec := resp.Header.Get("X-AbuseShield-Decision"); dec != "BLOCK" {
+		t.Errorf("X-AbuseShield-Decision: want BLOCK, got %q", dec)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Interceptor: L1 detection counters
+// ---------------------------------------------------------------------------
+
+// TestL1BurstDetectedCounter verifies DetectedByBurst increments when
+// burst_detected fires — even in shadow mode (detection ≠ enforcement).
+func TestL1BurstDetectedCounter(t *testing.T) {
+	resetMetrics()
+
+	shieldURL, _, cleanup := newInterceptorStack(t,
+		relaxedCfg, 1000, 2, int64(2*time.Second),
+		true /* shadow */, false, "/home", "/register",
+		echoHandler(http.StatusOK, "ok"),
+	)
+	defer cleanup()
+
+	const xff, ua = "10.7.3.1", "burst-counter-ua"
+
+	doMethodRequest(t, shieldURL, "GET", "/", xff, ua).Body.Close()
+	doMethodRequest(t, shieldURL, "GET", "/", xff, ua).Body.Close()
+	doMethodRequest(t, shieldURL, "GET", "/", xff, ua).Body.Close() // burst_detected
+
+	if metrics.DetectedByBurst.Load() < 1 {
+		t.Fatal("DetectedByBurst not incremented after burst_detected")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Interceptor: L2 sequence checks
+// ---------------------------------------------------------------------------
+
+// TestL2SequenceViolation verifies that hitting the funnel target without
+// first visiting the gate produces Decision=SUSPICIOUS.
+func TestL2SequenceViolation(t *testing.T) {
+	shieldURL, _, cleanup := newInterceptorStack(t,
+		relaxedCfg, 1000, 2000, int64(2*time.Second),
+		true /* shadow */, false, "/home", "/register",
+		echoHandler(http.StatusOK, "ok"),
+	)
+	defer cleanup()
+
+	const xff, ua = "10.7.4.1", "l2-seq-violation-ua"
+
+	// POST /register without prior GET /home → sequence_violation.
+	resp := doMethodRequest(t, shieldURL, "POST", "/register", xff, ua)
+	defer drainClose(resp)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("shadow mode: want 200 even on sequence_violation, got %d", resp.StatusCode)
+	}
+	if dec := resp.Header.Get("X-AbuseShield-Decision"); dec != "SUSPICIOUS" {
+		t.Errorf("X-AbuseShield-Decision: want SUSPICIOUS for sequence_violation, got %q", dec)
+	}
+}
+
+// TestL2SequenceHappyPath verifies that visiting the gate before the target
+// produces Decision=ALLOW (no sequence_violation raised).
+func TestL2SequenceHappyPath(t *testing.T) {
+	shieldURL, _, cleanup := newInterceptorStack(t,
+		relaxedCfg, 1000, 2000, int64(2*time.Second),
+		true /* shadow */, false, "/home", "/register",
+		echoHandler(http.StatusOK, "ok"),
+	)
+	defer cleanup()
+
+	const xff, ua = "10.7.5.1", "l2-happy-path-ua"
+
+	resp := doMethodRequest(t, shieldURL, "GET", "/home", xff, ua)
+	drainClose(resp)
+	if dec := resp.Header.Get("X-AbuseShield-Decision"); dec != "ALLOW" {
+		t.Errorf("gate visit: want ALLOW, got %q", dec)
+	}
+
+	resp = doMethodRequest(t, shieldURL, "POST", "/register", xff, ua)
+	defer drainClose(resp)
+	if dec := resp.Header.Get("X-AbuseShield-Decision"); dec != "ALLOW" {
+		t.Errorf("target after gate: want ALLOW, got %q", dec)
+	}
+}
+
+// TestL2SeqViolationCounter verifies DetectedSeq increments on
+// sequence_violation — regardless of shadow mode.
+func TestL2SeqViolationCounter(t *testing.T) {
+	resetMetrics()
+
+	shieldURL, _, cleanup := newInterceptorStack(t,
+		relaxedCfg, 1000, 2000, int64(2*time.Second),
+		true /* shadow */, false, "/home", "/register",
+		echoHandler(http.StatusOK, "ok"),
+	)
+	defer cleanup()
+
+	const xff, ua = "10.7.6.1", "l2-counter-ua"
+
+	doMethodRequest(t, shieldURL, "POST", "/register", xff, ua).Body.Close()
+
+	if metrics.DetectedSeq.Load() < 1 {
+		t.Fatal("DetectedSeq not incremented after sequence_violation")
+	}
+}
+
+// TestBlockOnSuspiciousEnforces verifies that with BlockOnSuspicious=true and
+// enforce mode, a sequence_violation produces a 403 rather than a proxy.
+func TestBlockOnSuspiciousEnforces(t *testing.T) {
+	shieldURL, _, cleanup := newInterceptorStack(t,
+		relaxedCfg, 1000, 2000, int64(2*time.Second),
+		false /* enforce */, true /* blockOnSuspicious */, "/home", "/register",
+		echoHandler(http.StatusOK, "ok"),
+	)
+	defer cleanup()
+
+	const xff, ua = "10.7.7.1", "block-suspicious-ua"
+
+	resp := doMethodRequest(t, shieldURL, "POST", "/register", xff, ua)
+	defer drainClose(resp)
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("blockOnSuspicious: want 403 for sequence_violation, got %d", resp.StatusCode)
+	}
+	if dec := resp.Header.Get("X-AbuseShield-Decision"); dec != "SUSPICIOUS" {
+		t.Errorf("X-AbuseShield-Decision: want SUSPICIOUS, got %q", dec)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Interceptor: kill switch
+// ---------------------------------------------------------------------------
+
+// TestKillSwitchBypassesDetection verifies that with the kill switch active,
+// requests are proxied even when the entity would otherwise trigger
+// burst_detected in enforce mode.
+func TestKillSwitchBypassesDetection(t *testing.T) {
+	shieldURL, ks, cleanup := newInterceptorStack(t,
+		relaxedCfg, 1000, 2, int64(2*time.Second),
+		false /* enforce */, false, "/home", "/register",
+		echoHandler(http.StatusOK, "ok"),
+	)
+	defer cleanup()
+
+	// First, confirm that burst_detected actually blocks without the kill switch.
+	const xff1, ua1 = "10.7.8.1", "ks-control-ua"
+	doMethodRequest(t, shieldURL, "GET", "/", xff1, ua1).Body.Close()
+	doMethodRequest(t, shieldURL, "GET", "/", xff1, ua1).Body.Close()
+	ctrlResp := doMethodRequest(t, shieldURL, "GET", "/", xff1, ua1)
+	if ctrlResp.StatusCode != http.StatusForbidden {
+		drainClose(ctrlResp)
+		t.Fatalf("control: want 403 on burst_detected (no kill switch), got %d", ctrlResp.StatusCode)
+	}
+	drainClose(ctrlResp)
+
+	// Enable kill switch and verify a fresh entity is always proxied.
+	ks.Store(true)
+	const xff2, ua2 = "10.7.8.2", "ks-active-ua" // different UA → different entity
+	for i := 1; i <= 5; i++ {
+		resp := doMethodRequest(t, shieldURL, "GET", "/", xff2, ua2)
+		drainClose(resp)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("kill switch active: request %d: want 200 (bypassed), got %d", i, resp.StatusCode)
+		}
 	}
 }
 
