@@ -84,6 +84,12 @@ Inspect SecurityEvent logs:
 python3 scripts/print_events.py /tmp/shield.log
 ```
 
+Inspect live metrics:
+
+```bash
+python3 scripts/print_metrics.py
+```
+
 ### Test
 
 Run the full test suite (includes race detector):
