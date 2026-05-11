@@ -112,6 +112,9 @@ func (i *Interceptor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !l1.Allowed && l1.Reason == "burst_detected" {
 		metrics.DetectedByBurst.Add(1)
 	}
+	if !l1.Allowed && l1.Reason == "rate_limited" {
+		metrics.DetectedByRateLimit.Add(1)
+	}
 	if l2.Suspicious && l2.Reason == "sequence_violation" {
 		metrics.DetectedSeq.Add(1)
 	}

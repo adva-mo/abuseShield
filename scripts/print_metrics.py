@@ -74,7 +74,9 @@ def main() -> None:
     _row("  By hot-key cooldown", _val(m, 'abuseshield_blocked_by_reason_total{reason="cooldown"}'))
 
     _section("Detection signals  (L1 / L2 — fire in shadow mode too)")
+    ratelim = m.get('abuseshield_detected_by_reason_total{reason="rate_limited"}', 0)
     _row("  burst_detected     (L1)", _val(m, 'abuseshield_detected_by_reason_total{reason="burst_detected"}',  YELLOW if burst else ""))
+    _row("  rate_limited       (L1)", _val(m, 'abuseshield_detected_by_reason_total{reason="rate_limited"}',    YELLOW if ratelim else ""))
     _row("  sequence_violation (L2)", _val(m, 'abuseshield_detected_by_reason_total{reason="sequence_violation"}', YELLOW if seq else ""))
 
     _section("SecurityEvents")
