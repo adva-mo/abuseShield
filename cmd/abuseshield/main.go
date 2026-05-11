@@ -68,36 +68,42 @@ func main() {
 	var killSwitch atomic.Bool
 	killSwitch.Store(cfg.KillSwitch)
 
+	shadowMode := *cfg.ShadowMode
+
 	// --- Build inner handler: existing L0 rate limiter → reverse proxy ---
 	innerHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		now := time.Now().UnixNano()
 		clientIP := proxy.ExtractClientIP(r)
 
-		ipDecision := l.CheckIP(clientIP, now)
-		if !ipDecision.Allowed {
-			metrics.BlockedTotal.Add(1)
-			switch ipDecision.Reason {
-			case "cooldown":
-				metrics.BlockedByCooldown.Add(1)
-			case "ip":
-				metrics.BlockedByIP.Add(1)
-			}
-			proxy.WriteRateLimitResponse(w, ipDecision.RetryAfterMs)
-			return
-		}
-
-		if apiKey := r.Header.Get("X-API-Key"); apiKey != "" {
-			keyDecision := l.CheckKey(apiKey, now)
-			if !keyDecision.Allowed {
+		// In shadow mode the L0 limiter is also bypassed: nothing blocks,
+		// requests are always forwarded so the user can observe signal quality safely.
+		if !shadowMode {
+			ipDecision := l.CheckIP(clientIP, now)
+			if !ipDecision.Allowed {
 				metrics.BlockedTotal.Add(1)
-				switch keyDecision.Reason {
+				switch ipDecision.Reason {
 				case "cooldown":
 					metrics.BlockedByCooldown.Add(1)
-				case "api_key":
-					metrics.BlockedByAPIKey.Add(1)
+				case "ip":
+					metrics.BlockedByIP.Add(1)
 				}
-				proxy.WriteRateLimitResponse(w, keyDecision.RetryAfterMs)
+				proxy.WriteRateLimitResponse(w, ipDecision.RetryAfterMs)
 				return
+			}
+
+			if apiKey := r.Header.Get("X-API-Key"); apiKey != "" {
+				keyDecision := l.CheckKey(apiKey, now)
+				if !keyDecision.Allowed {
+					metrics.BlockedTotal.Add(1)
+					switch keyDecision.Reason {
+					case "cooldown":
+						metrics.BlockedByCooldown.Add(1)
+					case "api_key":
+						metrics.BlockedByAPIKey.Add(1)
+					}
+					proxy.WriteRateLimitResponse(w, keyDecision.RetryAfterMs)
+					return
+				}
 			}
 		}
 

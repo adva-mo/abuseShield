@@ -107,13 +107,13 @@ func (i *Interceptor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	shouldBlock := decision == "BLOCK" || (decision == "SUSPICIOUS" && i.cfg.BlockOnSuspicious)
 	blocked := !i.cfg.ShadowMode && shouldBlock
 
-	// Update detection metrics. Detection counters fire regardless of shadow mode;
-	// BlockedTotal only increments when the request is actually rejected.
+	// Detection counters fire regardless of shadow mode so operators can observe
+	// signal quality. BlockedTotal only increments when a request is actually rejected.
 	if !l1.Allowed && l1.Reason == "burst_detected" {
-		metrics.BlockedByBurst.Add(1)
+		metrics.DetectedByBurst.Add(1)
 	}
 	if l2.Suspicious && l2.Reason == "sequence_violation" {
-		metrics.SuspiciousSeq.Add(1)
+		metrics.DetectedSeq.Add(1)
 	}
 	if blocked {
 		metrics.BlockedTotal.Add(1)

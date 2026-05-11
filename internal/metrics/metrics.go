@@ -14,11 +14,12 @@ var (
 	BlockedByAPIKey   atomic.Int64
 	BlockedByCooldown atomic.Int64
 
-	// Abuse detection counters.
-	EventsLogged  atomic.Int64 // SecurityEvents written to the log
-	EventsDropped atomic.Int64 // SecurityEvents dropped because the async buffer was full
-	BlockedByBurst atomic.Int64 // L1 burst_detected blocks
-	SuspiciousSeq  atomic.Int64 // L2 sequence_violation hits
+	// Abuse detection counters — fire on detection regardless of shadow mode.
+	// "Detected" means the signal fired; use BlockedTotal to count actual rejections.
+	EventsLogged   atomic.Int64 // SecurityEvents written to the log
+	EventsDropped  atomic.Int64 // SecurityEvents dropped because the async buffer was full
+	DetectedByBurst atomic.Int64 // L1 burst_detected signal fired
+	DetectedSeq     atomic.Int64 // L2 sequence_violation signal fired
 )
 
 // Sources carries the dynamic gauge callbacks needed by Handler.
@@ -40,8 +41,8 @@ func Handler(s Sources) http.HandlerFunc {
 		byCooldown := BlockedByCooldown.Load()
 		evLogged := EventsLogged.Load()
 		evDropped := EventsDropped.Load()
-		byBurst := BlockedByBurst.Load()
-		suspSeq := SuspiciousSeq.Load()
+		detByBurst := DetectedByBurst.Load()
+		detSeq := DetectedSeq.Load()
 
 		var activeKeys, activeEntities int64
 		if s.ActiveLimiterKeys != nil {
@@ -60,17 +61,17 @@ func Handler(s Sources) http.HandlerFunc {
 		fmt.Fprintf(w, "# TYPE abuseshield_blocked_requests_total counter\n")
 		fmt.Fprintf(w, "abuseshield_blocked_requests_total %d\n\n", blocked)
 
-		fmt.Fprintf(w, "# HELP abuseshield_blocked_by_reason_total Blocked requests broken down by reason\n")
+		fmt.Fprintf(w, "# HELP abuseshield_blocked_by_reason_total Enforced blocks broken down by reason (zero in shadow mode)\n")
 		fmt.Fprintf(w, "# TYPE abuseshield_blocked_by_reason_total counter\n")
 		fmt.Fprintf(w, "abuseshield_blocked_by_reason_total{reason=\"ip\"} %d\n", byIP)
 		fmt.Fprintf(w, "abuseshield_blocked_by_reason_total{reason=\"api_key\"} %d\n", byKey)
 		fmt.Fprintf(w, "abuseshield_blocked_by_reason_total{reason=\"cooldown\"} %d\n", byCooldown)
-		fmt.Fprintf(w, "abuseshield_blocked_by_reason_total{reason=\"burst_detected\"} %d\n", byBurst)
 		fmt.Fprintf(w, "\n")
 
-		fmt.Fprintf(w, "# HELP abuseshield_suspicious_total Suspicious requests by detection layer\n")
-		fmt.Fprintf(w, "# TYPE abuseshield_suspicious_total counter\n")
-		fmt.Fprintf(w, "abuseshield_suspicious_total{reason=\"sequence_violation\"} %d\n\n", suspSeq)
+		fmt.Fprintf(w, "# HELP abuseshield_detected_by_reason_total Detection signals fired (increments in shadow mode too)\n")
+		fmt.Fprintf(w, "# TYPE abuseshield_detected_by_reason_total counter\n")
+		fmt.Fprintf(w, "abuseshield_detected_by_reason_total{reason=\"burst_detected\"} %d\n", detByBurst)
+		fmt.Fprintf(w, "abuseshield_detected_by_reason_total{reason=\"sequence_violation\"} %d\n\n", detSeq)
 
 		fmt.Fprintf(w, "# HELP abuseshield_security_events_total SecurityEvents emitted by the detection engine\n")
 		fmt.Fprintf(w, "# TYPE abuseshield_security_events_total counter\n")
