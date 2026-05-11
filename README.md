@@ -71,6 +71,13 @@ python3 scripts/mock_upstream.py
 python3 scripts/test_abuse.py
 ```
 
+The script runs four flows against AbuseShield and prints a live metrics summary at the end:
+
+- **Flow A** — single bot entity fires 100 concurrent `POST /register` (20 workers). Expect `SUSPICIOUS` (sequence_violation) on the first few, then `BLOCK` (burst_detected) once the token bucket empties.
+- **Flow B** — 8 distinct bot IPs × 15 requests each, all concurrent. Each entity trips burst detection independently, verifying per-entity sharding.
+- **Flow C** — real user: `GET /home` → 1.5 s pause → `POST /register`. Both requests should be `ALLOW`.
+- **Flow D** *(optional)* — kill-switch toggle. Pass `--kill-switch` to enable this flow.
+
 Inspect SecurityEvent logs:
 
 ```bash
