@@ -52,38 +52,17 @@ func Handler(s Sources) http.HandlerFunc {
 			activeEntities = s.ActiveEntities()
 		}
 
-		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-		fmt.Fprintf(w, "# HELP abuseshield_allowed_requests_total Total allowed requests\n")
-		fmt.Fprintf(w, "# TYPE abuseshield_allowed_requests_total counter\n")
-		fmt.Fprintf(w, "abuseshield_allowed_requests_total %d\n\n", allowed)
-
-		fmt.Fprintf(w, "# HELP abuseshield_blocked_requests_total Total blocked requests\n")
-		fmt.Fprintf(w, "# TYPE abuseshield_blocked_requests_total counter\n")
-		fmt.Fprintf(w, "abuseshield_blocked_requests_total %d\n\n", blocked)
-
-		fmt.Fprintf(w, "# HELP abuseshield_blocked_by_reason_total Enforced blocks broken down by reason (zero in shadow mode)\n")
-		fmt.Fprintf(w, "# TYPE abuseshield_blocked_by_reason_total counter\n")
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		fmt.Fprintf(w, "abuseshield_allowed_requests_total %d\n", allowed)
+		fmt.Fprintf(w, "abuseshield_blocked_requests_total %d\n", blocked)
 		fmt.Fprintf(w, "abuseshield_blocked_by_reason_total{reason=\"ip\"} %d\n", byIP)
 		fmt.Fprintf(w, "abuseshield_blocked_by_reason_total{reason=\"api_key\"} %d\n", byKey)
 		fmt.Fprintf(w, "abuseshield_blocked_by_reason_total{reason=\"cooldown\"} %d\n", byCooldown)
-		fmt.Fprintf(w, "\n")
-
-		fmt.Fprintf(w, "# HELP abuseshield_detected_by_reason_total Detection signals fired (increments in shadow mode too)\n")
-		fmt.Fprintf(w, "# TYPE abuseshield_detected_by_reason_total counter\n")
 		fmt.Fprintf(w, "abuseshield_detected_by_reason_total{reason=\"burst_detected\"} %d\n", detByBurst)
-		fmt.Fprintf(w, "abuseshield_detected_by_reason_total{reason=\"sequence_violation\"} %d\n\n", detSeq)
-
-		fmt.Fprintf(w, "# HELP abuseshield_security_events_total SecurityEvents emitted by the detection engine\n")
-		fmt.Fprintf(w, "# TYPE abuseshield_security_events_total counter\n")
+		fmt.Fprintf(w, "abuseshield_detected_by_reason_total{reason=\"sequence_violation\"} %d\n", detSeq)
 		fmt.Fprintf(w, "abuseshield_security_events_total{status=\"logged\"} %d\n", evLogged)
-		fmt.Fprintf(w, "abuseshield_security_events_total{status=\"dropped\"} %d\n\n", evDropped)
-
-		fmt.Fprintf(w, "# HELP abuseshield_active_keys_count Current number of tracked limiter keys\n")
-		fmt.Fprintf(w, "# TYPE abuseshield_active_keys_count gauge\n")
-		fmt.Fprintf(w, "abuseshield_active_keys_count %d\n\n", activeKeys)
-
-		fmt.Fprintf(w, "# HELP abuseshield_active_entities_count Current number of tracked entity fingerprints\n")
-		fmt.Fprintf(w, "# TYPE abuseshield_active_entities_count gauge\n")
+		fmt.Fprintf(w, "abuseshield_security_events_total{status=\"dropped\"} %d\n", evDropped)
+		fmt.Fprintf(w, "abuseshield_active_keys_count %d\n", activeKeys)
 		fmt.Fprintf(w, "abuseshield_active_entities_count %d\n", activeEntities)
 	}
 }
