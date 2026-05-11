@@ -1,42 +1,201 @@
 #!/usr/bin/env python3
 """
-AbuseShield MVP — Fake Signup Simulation
-=========================================
-Sends two flows against a running AbuseShield instance to verify
-that SecurityEvent JSON logs are produced with correct decisions and reasons.
+AbuseShield — High-Volume Abuse Simulation
+===========================================
+Simulates realistic attack and real-user traffic against a running AbuseShield
+instance, then prints a live metrics summary from the /metrics endpoint.
 
 Usage:
-    # Terminal 1 — start a mock upstream (Python's built-in server is fine):
-    python3 -m http.server 9090
+    python3 scripts/mock_upstream.py         # Terminal 1: mock upstream on :9090
+    ./abuseshield -config config.json \\
+        2>&1 | tee /tmp/shield.log           # Terminal 2: AbuseShield on :8080
+    python3 scripts/test_abuse.py            # Terminal 3: this script
+    python3 scripts/print_events.py /tmp/shield.log   # inspect SecurityEvents
 
-    # Terminal 2 — start AbuseShield (shadow_mode must be true in config.json):
-    ./abuseshield -config config.json 2>&1 | tee /tmp/abuseshield.log
+Flags:
+    --kill-switch   Also run the kill-switch toggle flow (Flow D)
 
-    # Terminal 3 — run this script:
-    python3 scripts/test_abuse.py
-
-    # Pretty-print the captured SecurityEvent lines:
-    grep '^{' /tmp/abuseshield.log | python3 -m json.tool
-
-Requirements: Python 3.6+, no external dependencies.
+Requirements: Python 3.9+, no external dependencies.
 """
 
-import json
+import concurrent.futures
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
 
 BASE = "http://localhost:8080"
 
-# ── Shared headers for each persona ─────────────────────────────────────────
-# X-Forwarded-For uses TEST-NET addresses (RFC 5737) — non-routable, safe for docs.
-# AbuseShield reads the leftmost XFF entry as the originating client IP.
+_total_sent = 0
+_total_lock = threading.Lock()
 
-BOT_HEADERS = {
-    "User-Agent": "python-bot/1.0 (signup-spam)",
-    "X-Forwarded-For": "198.51.100.42",   # TEST-NET-3 — simulated bot IP
+
+def _inc(n: int = 1) -> None:
+    global _total_sent
+    with _total_lock:
+        _total_sent += n
+
+
+# ── HTTP helper ──────────────────────────────────────────────────────────────
+
+def req(method: str, path: str, headers: dict | None = None) -> int:
+    """Fire a single request; return the HTTP status code."""
+    url = BASE + path
+    r = urllib.request.Request(url, method=method, headers=headers or {})
+    try:
+        with urllib.request.urlopen(r, timeout=5) as resp:
+            return resp.status
+    except urllib.error.HTTPError as exc:
+        return exc.code
+    except Exception:
+        return 0
+
+
+def separator(title: str) -> None:
+    print()
+    print("=" * 64)
+    print(f"  {title}")
+    print("=" * 64)
+
+
+# ── Metrics helper ────────────────────────────────────────────────────────────
+
+def fetch_metrics() -> dict[str, int]:
+    """Pull /metrics and parse Prometheus plaintext into {name: value}."""
+    out: dict[str, int] = {}
+    try:
+        with urllib.request.urlopen(BASE + "/metrics", timeout=5) as resp:
+            for line in resp.read().decode().splitlines():
+                if line.startswith("#") or not line.strip():
+                    continue
+                parts = line.split()
+                if len(parts) == 2:
+                    try:
+                        out[parts[0]] = int(float(parts[1]))
+                    except ValueError:
+                        pass
+    except Exception:
+        pass
+    return out
+
+
+# ── Flow A: Single-bot burst (100 requests, 20 concurrent workers) ────────────
+#
+# One bot entity (fixed IP + UA) hammers /register with no prior /home visit.
+# With the default config (entity_burst=5, entity_rate_per_sec=2.5), the first
+# few requests pass or are flagged as SUSPICIOUS (sequence_violation), then the
+# token bucket empties and subsequent requests are BLOCK (burst_detected).
+#
+# Expected SecurityEvent breakdown (approximate, shadow_mode=true → all proxied):
+#   First 1-5 requests  → SUSPICIOUS  (sequence_violation, confidence=0.70)
+#   Request 6+          → BLOCK       (burst_detected,      confidence=0.95)
+
+BOT_A_HEADERS = {
+    "User-Agent": "python-bot/2.0 (signup-spam)",
+    "X-Forwarded-For": "198.51.100.42",
 }
+
+def _fire_a(_: int) -> int:
+    status = req("POST", "/register", headers=BOT_A_HEADERS)
+    _inc()
+    return status
+
+
+def flow_a_single_bot_burst() -> None:
+    num = 100
+    workers = 20
+    separator(f"Flow A — Single-bot burst  ({num} POST /register, {workers} concurrent workers)")
+    print(f"  Entity:       IP=198.51.100.42  UA={BOT_A_HEADERS['User-Agent']}")
+    print(f"  Requests:     {num} × POST /register  (no prior /home visit)")
+    print(f"  Concurrency:  {workers} parallel workers")
+    print()
+    print("  Expected SecurityEvents (shadow_mode=true — all requests still proxied):")
+    print("    First ~5  →  SUSPICIOUS  reason=sequence_violation  confidence=0.70")
+    print("    Remaining →  BLOCK       reason=burst_detected      confidence=0.95")
+    print()
+
+    counters: dict[int, int] = {}
+    t0 = time.monotonic()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        for status in pool.map(_fire_a, range(num)):
+            counters[status] = counters.get(status, 0) + 1
+    elapsed = time.monotonic() - t0
+
+    print(f"  Completed {num} requests in {elapsed:.2f}s  "
+          f"({num / elapsed:.0f} req/s)")
+    for code, cnt in sorted(counters.items()):
+        label = "proxied (shadow)" if code not in (403, 429) else "blocked"
+        print(f"    HTTP {code}: {cnt:>4}×  ({label})")
+
+
+# ── Flow B: Distributed bot swarm (8 IPs × 15 requests) ─────────────────────
+#
+# Eight distinct bot IPs each send 15 rapid /register POSTs — no /home visit.
+# Each entity trips the burst detector independently; useful for verifying that
+# the per-entity sharding works correctly across multiple source IPs.
+#
+# Expected: all entities hit BLOCK after ~5 requests; total 120 requests sent.
+
+BOT_B_UA = "python-swarm/1.0 (distributed-signup)"
+
+BOT_B_IPS = [
+    "192.0.2.1",  "192.0.2.2",  "192.0.2.3",  "192.0.2.4",
+    "192.0.2.5",  "192.0.2.6",  "192.0.2.7",  "192.0.2.8",
+]
+
+
+def _fire_b(ip: str) -> tuple[str, dict[int, int]]:
+    counters: dict[int, int] = {}
+    for _ in range(15):
+        status = req("POST", "/register", headers={
+            "User-Agent": BOT_B_UA,
+            "X-Forwarded-For": ip,
+        })
+        counters[status] = counters.get(status, 0) + 1
+        _inc()
+    return ip, counters
+
+
+def flow_b_distributed_swarm() -> None:
+    n_ips = len(BOT_B_IPS)
+    reqs_each = 15
+    total = n_ips * reqs_each
+    separator(
+        f"Flow B — Distributed swarm  ({n_ips} IPs × {reqs_each} requests = {total} total)"
+    )
+    print(f"  User-Agent:  {BOT_B_UA}")
+    print(f"  Source IPs:  {', '.join(BOT_B_IPS)}")
+    print(f"  Each entity: {reqs_each} × POST /register  (no prior /home)")
+    print()
+    print("  Expected: each IP independently trips burst_detected after ~5 requests.")
+    print()
+
+    t0 = time.monotonic()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=n_ips) as pool:
+        results = list(pool.map(_fire_b, BOT_B_IPS))
+    elapsed = time.monotonic() - t0
+
+    all_counters: dict[int, int] = {}
+    for ip, counters in results:
+        for code, cnt in counters.items():
+            all_counters[code] = all_counters.get(code, 0) + cnt
+
+    print(f"  Completed {total} requests in {elapsed:.2f}s  "
+          f"({total / elapsed:.0f} req/s)")
+    for code, cnt in sorted(all_counters.items()):
+        label = "proxied (shadow)" if code not in (403, 429) else "blocked"
+        print(f"    HTTP {code}: {cnt:>4}×  ({label})")
+
+
+# ── Flow C: Legitimate user (/home → pause → /register) ──────────────────────
+#
+# A real human browser visits /home first, waits 1.5 s, then POSTs /register.
+# AbuseShield should mark both requests ALLOW (seenHome=true, rate within limits).
+#
+# Expected SecurityEvents:
+#   GET  /home     → ALLOW  reason=""  confidence=1.0
+#   POST /register → ALLOW  reason=""  confidence=1.0  (seenHome=true)
 
 HUMAN_HEADERS = {
     "User-Agent": (
@@ -44,151 +203,113 @@ HUMAN_HEADERS = {
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/124.0.0.0 Safari/537.36"
     ),
-    "X-Forwarded-For": "203.0.113.17",    # TEST-NET-3 — simulated real-user IP
+    "X-Forwarded-For": "203.0.113.17",
 }
 
 
-# ── HTTP helper ──────────────────────────────────────────────────────────────
-
-def request(method: str, path: str, headers: dict | None = None) -> tuple[int, bytes]:
-    """Send a plain HTTP request; return (status_code, body_bytes)."""
-    url = BASE + path
-    req = urllib.request.Request(url, method=method, headers=headers or {})
-    try:
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            return resp.status, resp.read()
-    except urllib.error.HTTPError as exc:
-        return exc.code, exc.read()
-    except Exception as exc:  # noqa: BLE001
-        print(f"  [ERROR] {exc}", file=sys.stderr)
-        return 0, b""
-
-
-def separator(title: str) -> None:
+def flow_c_real_user() -> None:
+    separator("Flow C — Real user  (GET /home → 1.5 s pause → POST /register)")
+    print(f"  User-Agent:  {HUMAN_HEADERS['User-Agent'][:60]}…")
+    print(f"  Source IP:   {HUMAN_HEADERS['X-Forwarded-For']}")
     print()
-    print("=" * 60)
-    print(f"  {title}")
-    print("=" * 60)
-
-
-# ── Flow A: Fake Signup (bot) ────────────────────────────────────────────────
-#
-# A scripted bot hits /register directly — no prior /home visit —
-# and fires 8 requests in quick succession to exceed the burst window.
-#
-# Expected SecurityEvent pattern in the logs:
-#   • First requests: decision=ALLOW,     reason="",               confidence=1.0
-#                     (but reason="sequence_violation" from L2)
-#                     → decision=SUSPICIOUS, reason="sequence_violation", confidence=0.7
-#   • Later requests: decision=BLOCK,     reason="burst_detected",  confidence=0.95
-#   All events:       shadow_mode=true  (request always forwarded in MVP)
-
-def flow_a_fake_signup() -> None:
-    separator("Flow A — Fake Signup (bot skips /home, rapid /register POSTs)")
-    print(f"  User-Agent: {BOT_HEADERS['User-Agent']}")
+    print("  Expected: both requests → ALLOW  (seenHome=true, well within rate limits)")
     print()
 
-    num_requests = 11
-    delay_sec    = 0.05   # 50 ms → 20 req/s, well above the 5-burst / 2s default
-
-    for i in range(1, num_requests + 1):
-        status, _ = request("POST", "/register", headers=BOT_HEADERS)
-        # AbuseShield in shadow mode always proxies, so we get a real upstream
-        # response (or 502 if no upstream is running — both are expected).
-        label = "proxied" if status not in (403, 429) else "blocked"
-        print(f"  [{i:02d}] POST /register → HTTP {status}  ({label})")
-        time.sleep(delay_sec)
-
-    print()
-    print("  Expected SecurityEvents in AbuseShield stdout:")
-    print("    - First few:  decision=SUSPICIOUS, reason=sequence_violation, confidence=0.7")
-    print("    - After burst: decision=BLOCK,      reason=burst_detected,    confidence=0.95")
-
-
-# ── Flow B: Real User ────────────────────────────────────────────────────────
-#
-# A human browser visits /home first, waits a moment, then POSTs to /register.
-#
-# Expected SecurityEvent pattern:
-#   GET  /home     → decision=ALLOW, reason="",    confidence=1.0
-#   POST /register → decision=ALLOW, reason="",    confidence=1.0
-#                    (seenHome=true → no sequence_violation)
-
-def flow_b_real_user() -> None:
-    separator("Flow B — Real User (/home first, then /register)")
-    print(f"  User-Agent: {HUMAN_HEADERS['User-Agent'][:60]}...")
-    print()
-
-    status, _ = request("GET", "/home", headers=HUMAN_HEADERS)
+    status = req("GET", "/home", headers=HUMAN_HEADERS)
+    _inc()
     print(f"  [01] GET  /home     → HTTP {status}")
 
     wait = 1.5
-    print(f"  [--] thinking for {wait}s (simulating human behaviour)…")
+    print(f"  [--] pause {wait}s (simulating human think-time)…")
     time.sleep(wait)
 
-    status, _ = request("POST", "/register", headers=HUMAN_HEADERS)
+    status = req("POST", "/register", headers=HUMAN_HEADERS)
+    _inc()
     print(f"  [02] POST /register → HTTP {status}")
 
-    print()
-    print("  Expected SecurityEvents in AbuseShield stdout:")
-    print("    - GET  /home     → decision=ALLOW, reason=''")
-    print("    - POST /register → decision=ALLOW, reason=''  (seenHome=true, no violation)")
 
-
-# ── Flow C: Kill-Switch test (optional) ─────────────────────────────────────
+# ── Flow D: Kill-switch toggle (optional) ────────────────────────────────────
 #
-# Enable the kill switch and verify that requests are still forwarded
-# (and that AbuseShield logs a warning, not a SecurityEvent block).
+# Enables the kill switch, fires one request (should bypass all detection,
+# no SecurityEvent emitted), then disables it again.
 
-def flow_c_kill_switch(secret: str = "change-me") -> None:
-    separator("Flow C — Kill-Switch toggle (optional, requires correct secret)")
+def flow_d_kill_switch(secret: str = "change-me") -> None:
+    separator("Flow D — Kill-switch toggle  (optional, requires correct secret)")
 
-    status, _ = request(
-        "POST",
-        "/admin/kill-switch?enable=true",
-        headers={"X-Kill-Switch-Secret": secret},
-    )
-    print(f"  Enable kill-switch → HTTP {status}  (expected 200)")
+    status = req("POST", "/admin/kill-switch?enable=true",
+                 headers={"X-Kill-Switch-Secret": secret})
+    print(f"  Enable kill-switch   → HTTP {status}  (expected 200)")
 
-    status, _ = request("POST", "/register", headers=BOT_HEADERS)
-    print(f"  POST /register with KS active → HTTP {status}  (should still proxy, no SecurityEvent)")
+    status = req("POST", "/register", headers=BOT_A_HEADERS)
+    _inc()
+    print(f"  POST /register (KS)  → HTTP {status}  (proxied, no SecurityEvent)")
 
-    status, _ = request(
-        "POST",
-        "/admin/kill-switch?enable=false",
-        headers={"X-Kill-Switch-Secret": secret},
-    )
-    print(f"  Disable kill-switch → HTTP {status}  (expected 200)")
+    status = req("POST", "/admin/kill-switch?enable=false",
+                 headers={"X-Kill-Switch-Secret": secret})
+    print(f"  Disable kill-switch  → HTTP {status}  (expected 200)")
     print()
-    print("  Check AbuseShield stdout for '[AbuseShield] kill switch ACTIVE' log line.")
+    print("  Check AbuseShield stdout for '[AbuseShield] kill switch ACTIVE'.")
 
 
-# ── Entry point ──────────────────────────────────────────────────────────────
+# ── Metrics summary ───────────────────────────────────────────────────────────
+
+def print_metrics_summary() -> None:
+    separator("Metrics summary  (from GET /metrics)")
+    m = fetch_metrics()
+    if not m:
+        print("  Could not reach /metrics — is AbuseShield running?")
+        return
+
+    rows = [
+        ("abuseshield_requests_total",    "Total requests proxied"),
+        ("abuseshield_blocked_total",     "Blocked (enforcement mode only)"),
+        ("abuseshield_blocked_by_burst",  "Detections: burst_detected"),
+        ("abuseshield_suspicious_seq",    "Detections: sequence_violation"),
+        ("abuseshield_events_logged",     "SecurityEvents written to log"),
+        ("abuseshield_events_dropped",    "SecurityEvents dropped (buffer full)"),
+        ("abuseshield_rate_limited_total","Requests rate-limited (L0 IP/key)"),
+    ]
+    for key, label in rows:
+        val = m.get(key)
+        display = str(val) if val is not None else "(not reported)"
+        print(f"  {label:<40} {display}")
+
+
+# ── Entry point ───────────────────────────────────────────────────────────────
 
 def main() -> None:
     print()
-    print("AbuseShield — Fake Signup Simulation")
+    print("AbuseShield — High-Volume Abuse Simulation")
     print(f"Target: {BASE}")
     print()
-    print("Make sure AbuseShield is running and piping its stdout to a log file:")
-    print("  ./abuseshield -config config.json 2>&1 | tee /tmp/abuseshield.log")
+    print("Prerequisites:")
+    print("  Terminal 1: python3 scripts/mock_upstream.py")
+    print("  Terminal 2: ./abuseshield -config config.json 2>&1 | tee /tmp/shield.log")
     print()
-    print("After the script, inspect SecurityEvent JSON with:")
-    print("  grep '^{' /tmp/abuseshield.log | python3 -m json.tool")
+    print("After this script, inspect SecurityEvents with:")
+    print("  python3 scripts/print_events.py /tmp/shield.log")
 
-    flow_a_fake_signup()
+    flow_a_single_bot_burst()
     print()
-    time.sleep(1.0)   # brief pause so Flow A events have flushed before Flow B starts
+    time.sleep(0.5)
 
-    flow_b_real_user()
+    flow_b_distributed_swarm()
+    print()
+    time.sleep(0.5)
+
+    flow_c_real_user()
     print()
 
-    # Run kill-switch flow only when --kill-switch flag is passed.
     if "--kill-switch" in sys.argv:
-        flow_c_kill_switch()
+        flow_d_kill_switch()
+        print()
+
+    print_metrics_summary()
 
     separator("Done")
-    print("  Review AbuseShield logs to verify SecurityEvent decisions and reasons.")
+    with _total_lock:
+        sent = _total_sent
+    print(f"  Total requests sent this run: {sent}")
     print()
 
 
