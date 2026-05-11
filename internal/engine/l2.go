@@ -9,29 +9,29 @@ type L2Result struct {
 
 // CheckL2 updates the entity's page-visit sequence and returns an L2Result.
 //
-// The check enforces the invariant: a legitimate user visits /home before
-// /register. Hitting /register without a prior /home visit is a strong signal
-// of a scripted onboarding flow (bot or automation).
+// It enforces the invariant: a legitimate user visits gate before target.
+// Hitting target without a prior gate visit is a strong signal of a scripted
+// onboarding flow (bot or automation).
 //
-//   - path: normalized request path (trailing slash already stripped by caller)
-//   - now:  current time as UnixNano (recorded as homeTime on first /home visit)
+//   - gate:   the expected first step in the funnel (e.g. "/home")
+//   - target: the protected endpoint (e.g. "/register")
+//   - now:    current time as UnixNano (recorded as gateTime on first gate visit)
 //
-// Acquires shard lock, mutates seenHome/seenRegister/homeTime, releases lock.
-func CheckL2(s *Store, entityKey, path string, now int64) L2Result {
-	sh, st := s.getOrCreate(entityKey, now, 0) // burst=0: getOrCreate won't be used for L1 here
+// Acquires shard lock, mutates seenGate/seenTarget/gateTime, releases lock.
+func CheckL2(s *Store, entityKey, path, gate, target string, now int64) L2Result {
+	sh, st := s.getOrCreate(entityKey, now, 0)
 
 	var result L2Result
 
 	switch path {
-	case "/home":
-		if !st.seenHome {
-			st.seenHome = true
-			st.homeTime = now
+	case gate:
+		if !st.seenGate {
+			st.seenGate = true
+			st.gateTime = now
 		}
-	case "/register":
-		st.seenRegister = true
-		if !st.seenHome {
-			// /register reached without a prior /home visit — sequence violation.
+	case target:
+		st.seenTarget = true
+		if !st.seenGate {
 			result = L2Result{
 				Suspicious: true,
 				Reason:     "sequence_violation",

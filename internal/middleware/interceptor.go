@@ -16,11 +16,13 @@ import (
 // InterceptorConfig carries the engine parameters needed by the Interceptor.
 // Populated from config.Config by main.go.
 type InterceptorConfig struct {
-	RatePerSec         float64
-	Burst              float64
-	BurstWindowNs      int64
-	ShadowMode         bool
-	BlockOnSuspicious  bool // if true, SUSPICIOUS decisions also block (non-shadow mode only)
+	RatePerSec        float64
+	Burst             float64
+	BurstWindowNs     int64
+	ShadowMode        bool
+	BlockOnSuspicious bool // if true, SUSPICIOUS decisions also block (non-shadow mode only)
+	FunnelGate        string // expected first step in the signup funnel (e.g. "/home")
+	FunnelTarget      string // protected endpoint that requires the gate (e.g. "/register")
 }
 
 // Interceptor wraps an inner http.Handler (the reverse proxy + existing rate
@@ -95,7 +97,7 @@ func (i *Interceptor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if path == "" {
 		path = "/"
 	}
-	l2 := engine.CheckL2(i.store, entityKey, path, now)
+	l2 := engine.CheckL2(i.store, entityKey, path, i.cfg.FunnelGate, i.cfg.FunnelTarget, now)
 
 	// 6. Collect all fired signals and derive the primary decision.
 	decision, reason, confidence, signals := mergeDecisions(l1, l2)

@@ -22,9 +22,9 @@ type entityState struct {
 	windowStart int64 // UnixNano — start of current burst window
 
 	// L2: sequence tracking
-	seenHome     bool
-	seenRegister bool
-	homeTime     int64 // UnixNano of first /home visit
+	seenGate   bool
+	seenTarget bool
+	gateTime   int64 // UnixNano of first gate-path visit
 
 	// eviction
 	lastSeen int64 // UnixNano — updated on every access

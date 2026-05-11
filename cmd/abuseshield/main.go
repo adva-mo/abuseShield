@@ -116,6 +116,8 @@ func main() {
 			BurstWindowNs:     derived.EntityBurstWindow.Nanoseconds(),
 			ShadowMode:        *cfg.ShadowMode,
 			BlockOnSuspicious: cfg.BlockOnSuspicious,
+			FunnelGate:        cfg.FunnelGate,
+			FunnelTarget:      cfg.FunnelTarget,
 		},
 		&killSwitch,
 	)
