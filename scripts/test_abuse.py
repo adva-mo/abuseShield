@@ -254,28 +254,33 @@ def flow_d_kill_switch(secret: str = "change-me") -> None:
 # ── Metrics summary ───────────────────────────────────────────────────────────
 
 def print_metrics_summary() -> None:
-    separator("Metrics summary  (from GET /metrics)")
+    separator("Metrics summary  (GET /metrics)")
     m = fetch_metrics()
     if not m:
         print("  Could not reach /metrics — is AbuseShield running?")
         return
 
-    rows = [
-        ("abuseshield_allowed_requests_total",                              "Allowed (proxied to upstream)"),
-        ("abuseshield_blocked_requests_total",                             "Blocked — enforcement mode only (0 in shadow mode)"),
-        ('abuseshield_blocked_by_reason_total{reason="ip"}',               "  └ by IP rate limit"),
-        ('abuseshield_blocked_by_reason_total{reason="api_key"}',          "  └ by API key rate limit"),
-        ('abuseshield_blocked_by_reason_total{reason="cooldown"}',         "  └ by hot-key cooldown"),
-        ('abuseshield_detected_by_reason_total{reason="burst_detected"}',  "Detected: burst_detected (L1)"),
-        ('abuseshield_detected_by_reason_total{reason="sequence_violation"}', "Detected: sequence_violation (L2)"),
-        ("abuseshield_security_events_total{status=\"logged\"}",           "SecurityEvents written to log"),
-        ("abuseshield_security_events_total{status=\"dropped\"}",          "SecurityEvents dropped (buffer full)"),
-        ("abuseshield_active_entities_count",                              "Active entity fingerprints tracked"),
-    ]
-    for key, label in rows:
-        val = m.get(key)
-        display = str(val) if val is not None else "(not reported)"
-        print(f"  {label:<40} {display}")
+    def show(label: str, key: str) -> None:
+        v = m.get(key)
+        print(f"    {label:<34}  {v if v is not None else '—'}")
+
+    print("  Traffic")
+    show("Allowed (proxied)",               "abuseshield_allowed_requests_total")
+    show("Blocked (0 in shadow mode)",      "abuseshield_blocked_requests_total")
+
+    print("\n  L0 Rate Limiter (enforcement)")
+    show("By IP rate limit",    'abuseshield_blocked_by_reason_total{reason="ip"}')
+    show("By API key limit",    'abuseshield_blocked_by_reason_total{reason="api_key"}')
+    show("By hot-key cooldown", 'abuseshield_blocked_by_reason_total{reason="cooldown"}')
+
+    print("\n  Detection signals (L1/L2 — fire in shadow mode too)")
+    show("burst_detected     (L1)", 'abuseshield_detected_by_reason_total{reason="burst_detected"}')
+    show("sequence_violation (L2)", 'abuseshield_detected_by_reason_total{reason="sequence_violation"}')
+
+    print("\n  SecurityEvents")
+    show("Logged",            'abuseshield_security_events_total{status="logged"}')
+    show("Dropped (buf full)",'abuseshield_security_events_total{status="dropped"}')
+    show("Active entities",   "abuseshield_active_entities_count")
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
