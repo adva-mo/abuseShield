@@ -134,6 +134,10 @@ func (i *Interceptor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Blocked:    blocked,
 	})
 
+	// Always attach the engine decision so clients (and test scripts) can read
+	// what the engine would do even when shadow mode is forwarding the request.
+	w.Header().Set("X-AbuseShield-Decision", decision)
+
 	if blocked {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusForbidden)
