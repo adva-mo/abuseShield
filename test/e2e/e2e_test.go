@@ -170,6 +170,8 @@ func resetMetrics() {
 	metrics.BlockedByIP.Store(0)
 	metrics.BlockedByAPIKey.Store(0)
 	metrics.BlockedByCooldown.Store(0)
+	metrics.DetectedByBurst.Store(0)
+	metrics.DetectedSeq.Store(0)
 }
 
 // rateLimitBody is the JSON shape returned on 429 responses.

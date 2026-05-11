@@ -261,13 +261,16 @@ def print_metrics_summary() -> None:
         return
 
     rows = [
-        ("abuseshield_requests_total",    "Total requests proxied"),
-        ("abuseshield_blocked_total",     "Blocked (enforcement mode only)"),
-        ("abuseshield_blocked_by_burst",  "Detections: burst_detected"),
-        ("abuseshield_suspicious_seq",    "Detections: sequence_violation"),
-        ("abuseshield_events_logged",     "SecurityEvents written to log"),
-        ("abuseshield_events_dropped",    "SecurityEvents dropped (buffer full)"),
-        ("abuseshield_rate_limited_total","Requests rate-limited (L0 IP/key)"),
+        ("abuseshield_allowed_requests_total",                              "Allowed (proxied to upstream)"),
+        ("abuseshield_blocked_requests_total",                             "Blocked — enforcement mode only (0 in shadow mode)"),
+        ('abuseshield_blocked_by_reason_total{reason="ip"}',               "  └ by IP rate limit"),
+        ('abuseshield_blocked_by_reason_total{reason="api_key"}',          "  └ by API key rate limit"),
+        ('abuseshield_blocked_by_reason_total{reason="cooldown"}',         "  └ by hot-key cooldown"),
+        ('abuseshield_detected_by_reason_total{reason="burst_detected"}',  "Detected: burst_detected (L1)"),
+        ('abuseshield_detected_by_reason_total{reason="sequence_violation"}', "Detected: sequence_violation (L2)"),
+        ("abuseshield_security_events_total{status=\"logged\"}",           "SecurityEvents written to log"),
+        ("abuseshield_security_events_total{status=\"dropped\"}",          "SecurityEvents dropped (buffer full)"),
+        ("abuseshield_active_entities_count",                              "Active entity fingerprints tracked"),
     ]
     for key, label in rows:
         val = m.get(key)
