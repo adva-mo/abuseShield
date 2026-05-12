@@ -13,11 +13,15 @@ type L2Result struct {
 // Hitting target without a prior gate visit is a strong signal of a scripted
 // onboarding flow (bot or automation).
 //
+// Detection scope: L2 fires only on the first target hit where seenGate is
+// false. Once an entity has visited the gate, seenGate stays true for the
+// entity's lifetime (5 minutes of inactivity before eviction). Entities that
+// do visit the gate but then flood the target are caught by L1, not L2.
+//
 //   - gate:   the expected first step in the funnel (e.g. "/home")
 //   - target: the protected endpoint (e.g. "/register")
-//   - now:    current time as UnixNano (recorded as gateTime on first gate visit)
 //
-// Acquires shard lock, mutates seenGate/seenTarget/gateTime, releases lock.
+// Acquires shard lock, mutates seenGate/seenTarget, releases lock.
 func CheckL2(s *Store, entityKey, path, gate, target string, now int64) L2Result {
 	sh, st := s.getOrCreate(entityKey, now, 0)
 

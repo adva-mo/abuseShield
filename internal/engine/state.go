@@ -21,7 +21,11 @@ type entityState struct {
 	windowCount int64 // requests in current burst window
 	windowStart int64 // UnixNano — start of current burst window
 
-	// L2: sequence tracking
+	// L2: sequence tracking.
+	// seenGate is set on the entity's first gate-path visit and never cleared —
+	// it persists until the entity is evicted (5 minutes of inactivity).
+	// This is intentional: L2 catches clients that skip the funnel entirely.
+	// Clients that do visit the gate but then spam the target are caught by L1.
 	seenGate   bool
 	seenTarget bool
 
