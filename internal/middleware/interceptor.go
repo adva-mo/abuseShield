@@ -183,7 +183,7 @@ func mergeDecisions(l1 engine.L1Result, l2 engine.L2Result) (decision, reason st
 	if l2.Suspicious {
 		return "SUSPICIOUS", l2.Reason, l2.Confidence, signals
 	}
-	return "ALLOW", "", 1.0, nil
+	return "ALLOW", "", 1.0, []engine.Signal{}
 }
 
 // ip24CIDR converts "192.168.1.100" to "192.168.1.0/24" for log readability.
