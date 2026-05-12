@@ -27,7 +27,6 @@ func CheckL2(s *Store, entityKey, path, gate, target string, now int64) L2Result
 	case gate:
 		if !st.seenGate {
 			st.seenGate = true
-			st.gateTime = now
 		}
 	case target:
 		st.seenTarget = true
