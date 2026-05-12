@@ -154,13 +154,21 @@ func main() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
 
-	if cfg.KillSwitchSecret == "change-me" {
-		log.Println("WARN: kill_switch_secret is set to the default value 'change-me' — set a strong secret in config.json")
+	modeLabel := "ENFORCE (blocks active)"
+	if *cfg.ShadowMode {
+		modeLabel = "SHADOW  (detection only — nothing is blocked)"
 	}
+	log.Println("-----------------------------------------------------------")
+	log.Printf("AbuseShield  %s  →  %s", cfg.ListenAddr, cfg.UpstreamURL)
+	log.Printf("mode:         %s", modeLabel)
+	log.Printf("L1:           entity %.1f req/s  burst=%.0f  window=%.1fs",
+		cfg.EntityRatePerSec, cfg.EntityBurst, cfg.EntityBurstWindowSec)
+	log.Printf("L2:           %s → %s  block_on_suspicious=%v",
+		cfg.FunnelGate, cfg.FunnelTarget, cfg.BlockOnSuspicious)
+	log.Printf("kill switch:  %v", cfg.KillSwitch)
+	log.Println("-----------------------------------------------------------")
 
 	go func() {
-		log.Printf("AbuseShield listening on %s → %s (shadow_mode=%v, kill_switch=%v)",
-			cfg.ListenAddr, cfg.UpstreamURL, *cfg.ShadowMode, cfg.KillSwitch)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("server: %v", err)
 		}

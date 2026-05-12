@@ -102,8 +102,8 @@ func Load(path string) (*Config, *Derived, error) {
 		t := true
 		cfg.ShadowMode = &t
 	}
-	if cfg.KillSwitchSecret == "" {
-		cfg.KillSwitchSecret = "change-me"
+	if cfg.KillSwitchSecret == "" || cfg.KillSwitchSecret == "change-me" {
+		return nil, nil, fmt.Errorf("kill_switch_secret must be set to a strong secret in config.json (current value is insecure)")
 	}
 	if cfg.EntityRatePerSec <= 0 {
 		cfg.EntityRatePerSec = 2.5
