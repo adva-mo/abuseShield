@@ -147,6 +147,9 @@ func Load(path string) (*Config, *Derived, error) {
 	if cfg.FunnelTarget == "" {
 		cfg.FunnelTarget = "/register"
 	}
+	if cfg.FunnelGate == cfg.FunnelTarget {
+		return nil, nil, fmt.Errorf("funnel_gate and funnel_target must be different paths (both are %q)", cfg.FunnelGate)
+	}
 
 	d := &Derived{
 		Cooldown:          time.Duration(cfg.CooldownSeconds * float64(time.Second)),
