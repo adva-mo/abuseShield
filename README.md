@@ -143,6 +143,8 @@ Each entity is a fingerprint of IP/24 + User-Agent. L1 fires when an entity exce
 
 L2 checks that clients follow the expected navigation order. Hitting the target without first visiting the gate is a strong bot signal.
 
+Once an entity visits the gate, it is considered "seen" for up to 5 minutes of inactivity — after that the entity is evicted and the check resets. Entities that do visit the gate but then flood the target are caught by L1, not L2; the two layers are complementary.
+
 | Field | Default | Description |
 |---|---|---|
 | `funnel_gate` | `"/home"` | Path the client must visit before the target (e.g. a landing page). |
