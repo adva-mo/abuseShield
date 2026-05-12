@@ -1258,6 +1258,75 @@ func TestKillSwitchBypassesDetection(t *testing.T) {
 // Metrics counter integration tests
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Interceptor: L1 rate_limited (slow-drip)
+// ---------------------------------------------------------------------------
+
+// TestL1RateLimited verifies that a slow-drip entity — one that exhausts its
+// token bucket without ever hitting the burst window — receives Decision=BLOCK
+// with reason rate_limited and a 403 in enforce mode.
+//
+// burstWindowNs=1 (1ns) guarantees the window resets before every request so
+// windowCount stays at 0 and burst_detected can never fire. With rate=0.001
+// tokens/sec, refill between requests is negligible, so tokens drain after
+// exactly entityBurst requests.
+func TestL1RateLimited(t *testing.T) {
+	const burst = 3
+	shieldURL, _, cleanup := newInterceptorStack(t,
+		relaxedCfg, 0.001, burst, 1, // rate=0.001, burst=3, burstWindowNs=1ns
+		false /* enforce */, false, "/home", "/register",
+		echoHandler(http.StatusOK, "ok"),
+	)
+	defer cleanup()
+
+	const xff, ua = "10.8.0.1", "slow-drip-ua"
+
+	// First `burst` requests must be allowed (tokens: burst → 0).
+	for i := 1; i <= burst; i++ {
+		resp := doMethodRequest(t, shieldURL, "GET", "/", xff, ua)
+		drainClose(resp)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("request %d: want 200 before exhaustion, got %d", i, resp.StatusCode)
+		}
+	}
+
+	// Next request: tokens exhausted → rate_limited → 403.
+	resp := doMethodRequest(t, shieldURL, "GET", "/", xff, ua)
+	defer drainClose(resp)
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("want 403 on rate_limited, got %d", resp.StatusCode)
+	}
+	if dec := resp.Header.Get("X-AbuseShield-Decision"); dec != "BLOCK" {
+		t.Errorf("X-AbuseShield-Decision: want BLOCK, got %q", dec)
+	}
+}
+
+// TestL1RateLimitedCounter verifies that DetectedByRateLimit increments when
+// the rate_limited path fires — even in shadow mode.
+func TestL1RateLimitedCounter(t *testing.T) {
+	resetMetrics()
+
+	const burst = 3
+	shieldURL, _, cleanup := newInterceptorStack(t,
+		relaxedCfg, 0.001, burst, 1, // rate=0.001, burst=3, burstWindowNs=1ns
+		true /* shadow */, false, "/home", "/register",
+		echoHandler(http.StatusOK, "ok"),
+	)
+	defer cleanup()
+
+	const xff, ua = "10.8.0.2", "slow-drip-counter-ua"
+
+	for i := 0; i < burst; i++ {
+		doMethodRequest(t, shieldURL, "GET", "/", xff, ua).Body.Close()
+	}
+	doMethodRequest(t, shieldURL, "GET", "/", xff, ua).Body.Close() // triggers rate_limited
+
+	if metrics.DetectedByRateLimit.Load() < 1 {
+		t.Fatal("DetectedByRateLimit not incremented after rate_limited signal")
+	}
+}
+
 // TestMetricsCountersIncrement verifies that AllowedTotal and BlockedTotal
 // accurately reflect traffic through the shield.
 func TestMetricsCountersIncrement(t *testing.T) {
