@@ -110,34 +110,67 @@ The e2e suite spins up a real AbuseShield + upstream stack via `httptest` and co
 
 ## Configuration Reference
 
-Copy `config.example.json` to `config.json`. All fields have safe defaults.
+Copy `config.example.json` to `config.json`. All fields have safe defaults — the only required field is `upstream_url`.
+
+### General
 
 | Field | Default | Description |
 |---|---|---|
-| `listen_addr` | `8080` | Address AbuseShield listens on |
-| `upstream_url` | — | **Required.** Backend to proxy to |
-| `shadow_mode` | `true` | Log detections without blocking |
-| `block_on_suspicious` | `false` | Also block SUSPICIOUS decisions (not just BLOCK) |
-| `kill_switch` | `false` | Start with kill-switch active |
-| `kill_switch_secret` | — | Secret for `POST /admin/kill-switch` |
-| `entity_rate_per_sec` | `2.5` | L1 token refill rate per entity (tokens/sec) |
-| `entity_burst` | `5` | L1 max burst tokens per entity |
-| `entity_burst_window_sec` | `2.0` | Window for burst detection (seconds) |
-| `ip_rate_per_sec` | `10` | L0 token refill rate per IP (tokens/sec) |
-| `ip_burst` | `20` | L0 max burst per IP |
-| `key_rate_per_sec` | `100` | L0 token refill rate per API key (tokens/sec) |
-| `key_burst` | `200` | L0 max burst per API key |
-| `hot_key_multiplier` | `3.0` | L0 hot-key threshold: cooldown when rate > multiplier × rate_per_sec |
-| `cooldown_seconds` | `60` | L0 cooldown duration after a hot-key is detected |
-| `event_buffer_size` | `1000` | Async SecurityEvent log buffer depth |
-| `funnel_gate` | `"/home"` | L2: path the user must visit first |
-| `funnel_target` | `"/register"` | L2: protected path — triggers `sequence_violation` if gate was not seen |
-| `eviction_interval_seconds` | `60` | How often stale entity and limiter state is evicted |
-| `max_idle_conns_per_host` | `256` | HTTP transport: max idle connections to upstream |
-| `dial_timeout_seconds` | `5` | HTTP transport: TCP dial timeout |
-| `tls_handshake_timeout_seconds` | `10` | HTTP transport: TLS handshake timeout |
-| `read_header_timeout_seconds` | `5` | HTTP server: max time to read request headers |
-| `write_timeout_seconds` | `60` | HTTP server: max time to write a response |
+| `listen_addr` | `8080` | Address and port AbuseShield listens on (e.g. `":8080"` or `"0.0.0.0:8080"`) |
+| `upstream_url` | — | **Required.** Full URL of the backend to proxy to (e.g. `"http://api:3000"`) |
+
+### Detection Behavior
+
+| Field | Default | Description |
+|---|---|---|
+| `shadow_mode` | `true` | When `true`, detections are logged as SecurityEvents but nothing is blocked — all requests are forwarded. Disable once you are confident in signal quality. |
+| `block_on_suspicious` | `false` | When `true`, requests flagged SUSPICIOUS (e.g. sequence_violation) are also blocked, not just logged. Has no effect in shadow mode. |
+| `kill_switch` | `false` | Start with the kill switch active — skips all detection and proxies everything. Normally toggled at runtime via the admin endpoint. |
+| `kill_switch_secret` | — | Shared secret that authenticates `POST /admin/kill-switch` requests. Set a strong random value; never commit it. |
+
+### L1 — Per-Entity Rate & Burst Detection
+
+Each entity is a fingerprint of IP/24 + User-Agent. L1 fires when an entity exceeds its token bucket or hammers the server in a short window.
+
+| Field | Default | Description |
+|---|---|---|
+| `entity_rate_per_sec` | `2.5` | Sustained request rate allowed per entity (tokens refilled per second). |
+| `entity_burst` | `5` | Maximum burst an entity can send before L1 fires. Lower values are stricter. |
+| `entity_burst_window_sec` | `2.0` | Time window (seconds) used to measure burst. Requests beyond `entity_burst` within this window trigger `burst_detected`. |
+
+### L2 — Signup Funnel Sequence
+
+L2 checks that clients follow the expected navigation order. Hitting the target without first visiting the gate is a strong bot signal.
+
+| Field | Default | Description |
+|---|---|---|
+| `funnel_gate` | `"/home"` | Path the client must visit before the target (e.g. a landing page). |
+| `funnel_target` | `"/register"` | Protected path. A direct hit without a prior gate visit triggers `sequence_violation`. Must differ from `funnel_gate`. |
+
+### L0 — IP and API Key Rate Limits
+
+Hard per-IP and per-key limits enforced before requests reach the detection engine. Skipped in shadow mode.
+
+| Field | Default | Description |
+|---|---|---|
+| `ip_rate_per_sec` | `10` | Sustained request rate allowed per IP (tokens refilled per second). |
+| `ip_burst` | `20` | Maximum burst per IP before a 429 is returned. |
+| `key_rate_per_sec` | `100` | Sustained request rate allowed per API key (`X-API-Key` header). |
+| `key_burst` | `200` | Maximum burst per API key before a 429 is returned. |
+| `hot_key_multiplier` | `3.0` | An IP or key that sustains more than `multiplier × rate_per_sec` requests per second is put into cooldown and locked out for `cooldown_seconds`. |
+| `cooldown_seconds` | `60` | How long a hot IP or key is locked out (all requests return 429) after triggering the hot-key threshold. |
+
+### Infrastructure
+
+| Field | Default | Description |
+|---|---|---|
+| `event_buffer_size` | `1000` | Depth of the async SecurityEvent log buffer. Increase if you see `events_dropped` in metrics under high traffic. |
+| `eviction_interval_seconds` | `60` | How often stale per-entity and per-key state is evicted from memory. |
+| `max_idle_conns_per_host` | `256` | HTTP connection pool size to the upstream. |
+| `dial_timeout_seconds` | `5` | TCP dial timeout when connecting to upstream. |
+| `tls_handshake_timeout_seconds` | `10` | TLS handshake timeout when connecting to an HTTPS upstream. |
+| `read_header_timeout_seconds` | `5` | Max time to read incoming request headers before closing the connection. |
+| `write_timeout_seconds` | `60` | Max time to write a full response to the client. |
 
 ---
 
