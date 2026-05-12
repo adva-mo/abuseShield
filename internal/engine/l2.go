@@ -21,7 +21,7 @@ type L2Result struct {
 //   - gate:   the expected first step in the funnel (e.g. "/home")
 //   - target: the protected endpoint (e.g. "/register")
 //
-// Acquires shard lock, mutates seenGate/seenTarget, releases lock.
+// Acquires shard lock, mutates seenGate, releases lock.
 func CheckL2(s *Store, entityKey, path, gate, target string, now int64) L2Result {
 	sh, st := s.getOrCreate(entityKey, now, 0)
 
