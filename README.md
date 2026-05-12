@@ -116,7 +116,7 @@ Copy `config.example.json` to `config.json`. All fields have safe defaults — t
 
 | Field | Default | Description |
 |---|---|---|
-| `listen_addr` | `8080` | Address and port AbuseShield listens on (e.g. `":8080"` or `"0.0.0.0:8080"`) |
+| `listen_addr` | `:8080` | Address and port AbuseShield listens on (e.g. `":8080"` or `"0.0.0.0:8080"`) |
 | `upstream_url` | — | **Required.** Full URL of the backend to proxy to (e.g. `"http://api:3000"`) |
 
 ### Detection Behavior
@@ -163,6 +163,15 @@ Hard per-IP and per-key limits enforced before requests reach the detection engi
 | `hot_key_multiplier` | `3.0` | An IP or key that sustains more than `multiplier × rate_per_sec` requests per second is put into cooldown and locked out for `cooldown_seconds`. |
 | `cooldown_seconds` | `60` | How long a hot IP or key is locked out (all requests return 429) after triggering the hot-key threshold. |
 
+### Allowlist — Trusted Sources
+
+Requests matching any allowlist entry bypass L0, L1, and L2 entirely and go straight to the upstream.
+
+| Field | Default | Description |
+|---|---|---|
+| `allowlist.ips` | `[]` | Exact IPs or CIDR ranges that are always trusted (e.g. `"10.0.0.0/8"`, `"192.168.1.50"`). |
+| `allowlist.paths` | `[]` | Path prefixes that are always trusted (e.g. `"/health"` also covers `"/health/check"`). |
+| `allowlist.api_keys` | `[]` | API keys (`X-API-Key` header) that are always trusted. |
 
 ---
 
@@ -204,6 +213,9 @@ python3 scripts/print_metrics.py
 
 ## Deployment Notes
 
+- Use `allowlist.ips` for trusted internal services or monitoring agents that should never be rate-limited or inspected. Supports exact IPs and CIDR ranges.
+- Use `allowlist.paths` for health-check or internal endpoints (e.g. `/health`, `/internal/`). Prefix-matched, so `/health` covers `/health/check` too.
+- Use `allowlist.api_keys` for internal service-to-service calls that carry a known key. Allowlisted requests skip L0, L1, and L2 entirely and go straight to the upstream.
 - AbuseShield is designed to sit **behind a trusted Load Balancer** that sets `X-Forwarded-For`. The proxy reads the rightmost XFF entry as the client IP.
 - The binary has **no external dependencies** — deploy as a single static binary.
 - SecurityEvents are written to **stdout as JSON lines**. Pipe to your log aggregator (`| fluentd`, `| vector`, etc.).
