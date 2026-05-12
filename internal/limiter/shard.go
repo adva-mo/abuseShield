@@ -73,8 +73,8 @@ func allow(shards *[numShards]shard, key string, rate, burst, hotMul float64, co
 			sh.keys = make(map[string]*bucket)
 		}
 		sh.keys[key] = b
-		sh.mu.Unlock()
 		sh.size.Add(1)
+		sh.mu.Unlock()
 		return true, 0, ""
 	}
 
