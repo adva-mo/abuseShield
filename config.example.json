@@ -1,5 +1,5 @@
 {
-  "listen_addr": "8080",
+  "listen_addr": ":8080",
   "upstream_url": "http://localhost:9090",
 
   "shadow_mode": true,
@@ -20,5 +20,11 @@
   "key_rate_per_sec": 100.0,
   "key_burst": 200,
   "hot_key_multiplier": 3.0,
-  "cooldown_seconds": 60
+  "cooldown_seconds": 60,
+
+  "allowlist": {
+    "ips":      ["10.0.0.0/8", "192.168.1.50"],
+    "paths":    ["/health", "/internal/"],
+    "api_keys": ["internal-service-key"]
+  }
 }

@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/adva-mo/abuseShield/internal/allowlist"
 )
 
 // Config holds all runtime configuration loaded from config.json.
@@ -43,6 +45,10 @@ type Config struct {
 	// a sequence_violation. Defaults to "/home" → "/register".
 	FunnelGate   string `json:"funnel_gate"`
 	FunnelTarget string `json:"funnel_target"`
+
+	// Allowlist defines trusted IPs/CIDRs, path prefixes, and API keys that
+	// bypass all detection layers (L0, L1, L2) and go straight to the upstream.
+	Allowlist allowlist.Config `json:"allowlist"`
 }
 
 // Derived holds computed values derived from Config. Infrastructure values
