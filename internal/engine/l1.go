@@ -5,7 +5,7 @@ type L1Result struct {
 	Allowed    bool
 	Decision   string  // "ALLOW" | "BLOCK"
 	Reason     string  // "" | "rate_limited" | "burst_detected"
-	Confidence float64 // 0.0 when allowed; 0.90 rate_limited; 0.95 burst_detected
+	Confidence float64 // 1.0 when allowed; 0.90 rate_limited; 0.95 burst_detected
 }
 
 // CheckL1 performs the L1 check for the given entity.
