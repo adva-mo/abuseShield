@@ -1183,6 +1183,43 @@ func TestBlockOnSuspiciousEnforces(t *testing.T) {
 // Interceptor: kill switch
 // ---------------------------------------------------------------------------
 
+// TestKillSwitchResumesEnforcement verifies that disabling the kill switch
+// restores detection enforcement. Kill-switch requests bypass CheckL1 entirely,
+// so entity state must be primed before the switch is enabled.
+func TestKillSwitchResumesEnforcement(t *testing.T) {
+	// Large burst window (10s) so the window doesn't expire mid-test.
+	shieldURL, ks, cleanup := newInterceptorStack(t,
+		relaxedCfg, 1000, 2, int64(10*time.Second),
+		false /* enforce */, false, "/home", "/register",
+		echoHandler(http.StatusOK, "ok"),
+	)
+	defer cleanup()
+
+	const xff, ua = "10.7.9.1", "ks-resume-ua"
+
+	// Prime entity to the burst edge: 2 allowed requests → windowCount=2.
+	doMethodRequest(t, shieldURL, "GET", "/", xff, ua).Body.Close()
+	doMethodRequest(t, shieldURL, "GET", "/", xff, ua).Body.Close()
+
+	// Enable kill switch. 3rd request bypasses CheckL1 entirely (entity state
+	// stays at windowCount=2) and is proxied through.
+	ks.Store(true)
+	resp := doMethodRequest(t, shieldURL, "GET", "/", xff, ua)
+	drainClose(resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("kill switch on: want 200 (bypassed), got %d", resp.StatusCode)
+	}
+
+	// Disable kill switch. Entity windowCount is still 2 — next request triggers
+	// burst_detected (windowCount+1=3 > burst=2) and must be blocked.
+	ks.Store(false)
+	resp = doMethodRequest(t, shieldURL, "GET", "/", xff, ua)
+	defer drainClose(resp)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("kill switch off: want 403 (enforcement resumed), got %d", resp.StatusCode)
+	}
+}
+
 // TestKillSwitchBypassesDetection verifies that with the kill switch active,
 // requests are proxied even when the entity would otherwise trigger
 // burst_detected in enforce mode.
