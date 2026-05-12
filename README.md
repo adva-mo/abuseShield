@@ -127,6 +127,7 @@ Copy `config.example.json` to `config.json`. All fields have safe defaults — t
 | `block_on_suspicious` | `false` | When `true`, requests flagged SUSPICIOUS (e.g. sequence_violation) are also blocked, not just logged. Has no effect in shadow mode. |
 | `kill_switch` | `false` | Start with the kill switch active — skips all detection and proxies everything. Normally toggled at runtime via the admin endpoint. |
 | `kill_switch_secret` | — | Shared secret that authenticates `POST /admin/kill-switch` requests. Set a strong random value; never commit it. |
+| `event_buffer_size` | `1000` | Depth of the async SecurityEvent log buffer. Increase if you see `events_dropped` in metrics under high traffic. |
 
 ### L1 — Per-Entity Rate & Burst Detection
 
@@ -160,17 +161,6 @@ Hard per-IP and per-key limits enforced before requests reach the detection engi
 | `hot_key_multiplier` | `3.0` | An IP or key that sustains more than `multiplier × rate_per_sec` requests per second is put into cooldown and locked out for `cooldown_seconds`. |
 | `cooldown_seconds` | `60` | How long a hot IP or key is locked out (all requests return 429) after triggering the hot-key threshold. |
 
-### Infrastructure
-
-| Field | Default | Description |
-|---|---|---|
-| `event_buffer_size` | `1000` | Depth of the async SecurityEvent log buffer. Increase if you see `events_dropped` in metrics under high traffic. |
-| `eviction_interval_seconds` | `60` | How often stale per-entity and per-key state is evicted from memory. |
-| `max_idle_conns_per_host` | `256` | HTTP connection pool size to the upstream. |
-| `dial_timeout_seconds` | `5` | TCP dial timeout when connecting to upstream. |
-| `tls_handshake_timeout_seconds` | `10` | TLS handshake timeout when connecting to an HTTPS upstream. |
-| `read_header_timeout_seconds` | `5` | Max time to read incoming request headers before closing the connection. |
-| `write_timeout_seconds` | `60` | Max time to write a full response to the client. |
 
 ---
 

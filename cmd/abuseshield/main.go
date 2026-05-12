@@ -51,7 +51,7 @@ func main() {
 
 	// --- Reverse proxy ---
 	transport := proxy.NewTransport(
-		cfg.MaxIdleConnsPerHost,
+		derived.MaxIdleConnsPerHost,
 		derived.DialTimeout,
 		derived.TLSTimeout,
 	)
