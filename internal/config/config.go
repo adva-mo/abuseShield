@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/adva-mo/abuseShield/internal/allowlist"
@@ -22,13 +23,6 @@ type Config struct {
 	HotKeyMultiplier float64 `json:"hot_key_multiplier"`
 	CooldownSeconds  float64 `json:"cooldown_seconds"`
 
-	EvictionIntervalSeconds         float64 `json:"eviction_interval_seconds"`
-	MaxIdleConnsPerHost             int     `json:"max_idle_conns_per_host"`
-	DialTimeoutSeconds              float64 `json:"dial_timeout_seconds"`
-	TLSHandshakeTimeoutSeconds      float64 `json:"tls_handshake_timeout_seconds"`
-	ReadHeaderTimeoutSeconds        float64 `json:"read_header_timeout_seconds"`
-	WriteTimeoutSeconds             float64 `json:"write_timeout_seconds"`
-
 	// Abuse detection engine settings.
 	// ShadowMode uses *bool so the JSON zero-value (false) is distinguishable
 	// from "not set", allowing the default to be true.
@@ -46,21 +40,28 @@ type Config struct {
 	// (e.g. sequence_violation) also block the request. Defaults to false so
 	// sequence detection can be observed in shadow mode before enforcement.
 	BlockOnSuspicious bool `json:"block_on_suspicious"`
+	// FunnelGate / FunnelTarget define the L2 sequence check.
+	// A request to FunnelTarget without a prior FunnelGate visit triggers
+	// a sequence_violation. Defaults to "/home" → "/register".
+	FunnelGate   string `json:"funnel_gate"`
+	FunnelTarget string `json:"funnel_target"`
 
 	// Allowlist defines trusted IPs/CIDRs, path prefixes, and API keys that
 	// bypass all detection layers (L0, L1, L2) and go straight to the upstream.
 	Allowlist allowlist.Config `json:"allowlist"`
 }
 
-// Derived durations (populated by Load).
+// Derived holds computed values derived from Config. Infrastructure values
+// that are not user-tunable are hardcoded here.
 type Derived struct {
-	Cooldown         time.Duration
-	EvictionInterval time.Duration
-	DialTimeout      time.Duration
-	TLSTimeout       time.Duration
-	ReadHeaderTimeout time.Duration
-	WriteTimeout     time.Duration
-	EntityBurstWindow time.Duration
+	Cooldown            time.Duration
+	EvictionInterval    time.Duration
+	DialTimeout         time.Duration
+	TLSTimeout          time.Duration
+	ReadHeaderTimeout   time.Duration
+	WriteTimeout        time.Duration
+	EntityBurstWindow   time.Duration
+	MaxIdleConnsPerHost int
 }
 
 func Load(path string) (*Config, *Derived, error) {
@@ -76,7 +77,10 @@ func Load(path string) (*Config, *Derived, error) {
 	}
 
 	if cfg.ListenAddr == "" {
-		cfg.ListenAddr = ":8080"
+		cfg.ListenAddr = "8080"
+	}
+	if !strings.Contains(cfg.ListenAddr, ":") {
+		cfg.ListenAddr = ":" + cfg.ListenAddr
 	}
 	if cfg.UpstreamURL == "" {
 		return nil, nil, fmt.Errorf("upstream_url is required")
@@ -99,32 +103,13 @@ func Load(path string) (*Config, *Derived, error) {
 	if cfg.CooldownSeconds <= 0 {
 		cfg.CooldownSeconds = 60
 	}
-	if cfg.EvictionIntervalSeconds <= 0 {
-		cfg.EvictionIntervalSeconds = 60
-	}
-	if cfg.MaxIdleConnsPerHost <= 0 {
-		cfg.MaxIdleConnsPerHost = 256
-	}
-	if cfg.DialTimeoutSeconds <= 0 {
-		cfg.DialTimeoutSeconds = 5
-	}
-	if cfg.TLSHandshakeTimeoutSeconds <= 0 {
-		cfg.TLSHandshakeTimeoutSeconds = 10
-	}
-	if cfg.ReadHeaderTimeoutSeconds <= 0 {
-		cfg.ReadHeaderTimeoutSeconds = 5
-	}
-	if cfg.WriteTimeoutSeconds <= 0 {
-		cfg.WriteTimeoutSeconds = 60
-	}
-
 	// Abuse detection defaults.
 	if cfg.ShadowMode == nil {
 		t := true
 		cfg.ShadowMode = &t
 	}
-	if cfg.KillSwitchSecret == "" {
-		cfg.KillSwitchSecret = "change-me"
+	if cfg.KillSwitchSecret == "" || cfg.KillSwitchSecret == "change-me" {
+		return nil, nil, fmt.Errorf("kill_switch_secret must be set to a strong secret in config.json (current value is insecure)")
 	}
 	if cfg.EntityRatePerSec <= 0 {
 		cfg.EntityRatePerSec = 2.5
@@ -138,15 +123,25 @@ func Load(path string) (*Config, *Derived, error) {
 	if cfg.EventBufferSize <= 0 {
 		cfg.EventBufferSize = 1000
 	}
+	if cfg.FunnelGate == "" {
+		cfg.FunnelGate = "/home"
+	}
+	if cfg.FunnelTarget == "" {
+		cfg.FunnelTarget = "/register"
+	}
+	if cfg.FunnelGate == cfg.FunnelTarget {
+		return nil, nil, fmt.Errorf("funnel_gate and funnel_target must be different paths (both are %q)", cfg.FunnelGate)
+	}
 
 	d := &Derived{
-		Cooldown:          time.Duration(cfg.CooldownSeconds * float64(time.Second)),
-		EvictionInterval:  time.Duration(cfg.EvictionIntervalSeconds * float64(time.Second)),
-		DialTimeout:       time.Duration(cfg.DialTimeoutSeconds * float64(time.Second)),
-		TLSTimeout:        time.Duration(cfg.TLSHandshakeTimeoutSeconds * float64(time.Second)),
-		ReadHeaderTimeout: time.Duration(cfg.ReadHeaderTimeoutSeconds * float64(time.Second)),
-		WriteTimeout:      time.Duration(cfg.WriteTimeoutSeconds * float64(time.Second)),
-		EntityBurstWindow: time.Duration(cfg.EntityBurstWindowSec * float64(time.Second)),
+		Cooldown:            time.Duration(cfg.CooldownSeconds * float64(time.Second)),
+		EvictionInterval:    60 * time.Second,
+		DialTimeout:         5 * time.Second,
+		TLSTimeout:          10 * time.Second,
+		ReadHeaderTimeout:   5 * time.Second,
+		WriteTimeout:        60 * time.Second,
+		EntityBurstWindow:   time.Duration(cfg.EntityBurstWindowSec * float64(time.Second)),
+		MaxIdleConnsPerHost: 256,
 	}
 
 	return &cfg, d, nil

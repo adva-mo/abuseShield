@@ -1,6 +1,7 @@
 package limiter
 
 import (
+	"context"
 	"time"
 )
 
@@ -76,17 +77,23 @@ func (l *Limiter) ActiveKeysCount() int64 {
 
 // StartEviction launches a background goroutine that evicts stale buckets
 // every interval. Buckets unused for more than 5 minutes are removed.
-func (l *Limiter) StartEviction(interval time.Duration) {
+// The goroutine stops when ctx is cancelled.
+func (l *Limiter) StartEviction(ctx context.Context, interval time.Duration) {
 	const stalenessNs = 5 * 60 * int64(time.Second/time.Nanosecond) // 5 minutes in ns
 
 	go func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
-		for range ticker.C {
-			now := time.Now().UnixNano()
-			for i := 0; i < numShards; i++ {
-				evictShard(&l.ipShards[i], now, stalenessNs)
-				evictShard(&l.keyShards[i], now, stalenessNs)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				now := time.Now().UnixNano()
+				for i := 0; i < numShards; i++ {
+					evictShard(&l.ipShards[i], now, stalenessNs)
+					evictShard(&l.keyShards[i], now, stalenessNs)
+				}
 			}
 		}
 	}()

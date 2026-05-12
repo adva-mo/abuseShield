@@ -4,7 +4,8 @@ import (
 	"encoding/json"
 	"io"
 	"sync"
-	"sync/atomic"
+
+	"github.com/adva-mo/abuseShield/internal/metrics"
 )
 
 // Signal represents a single fired detection rule — one entry per layer that
@@ -33,10 +34,6 @@ type SecurityEvent struct {
 	ShadowMode bool     `json:"shadow_mode"` // true = detection only, request was forwarded regardless
 	Blocked    bool     `json:"blocked"`     // true = request was rejected and NOT forwarded to upstream
 }
-
-// EventsDropped counts SecurityEvents that were silently dropped because the
-// async buffer was full. Exported for use by metrics package.
-var EventsDropped atomic.Int64
 
 // Logger is an async SecurityEvent writer backed by a buffered channel.
 // A background goroutine drains the channel and writes JSON lines to the
@@ -69,7 +66,7 @@ func (l *Logger) Emit(ev SecurityEvent) {
 	select {
 	case l.ch <- ev:
 	default:
-		EventsDropped.Add(1)
+		metrics.EventsDropped.Add(1)
 	}
 }
 
@@ -85,8 +82,9 @@ func (l *Logger) Close() {
 func (l *Logger) drain() {
 	defer l.wg.Done()
 	for ev := range l.ch {
-		// Encoding errors (e.g. broken writer) are intentionally ignored —
-		// the proxy must never stop serving traffic due to a logging failure.
+		// Encoding errors are intentionally ignored — the proxy must never
+		// stop serving traffic due to a logging failure.
 		_ = l.enc.Encode(ev) //nolint:errcheck
+		metrics.EventsLogged.Add(1)
 	}
 }

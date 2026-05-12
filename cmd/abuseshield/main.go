@@ -35,6 +35,10 @@ func main() {
 		log.Fatalf("invalid upstream_url: %v", err)
 	}
 
+	// Single context drives all eviction goroutines (L0 limiter + entity store).
+	evictCtx, evictCancel := context.WithCancel(context.Background())
+	defer evictCancel()
+
 	// --- Existing IP/API-key rate limiter (L0 protection, unchanged) ---
 	l := limiter.New(
 		cfg.IPRatePerSec,
@@ -44,11 +48,11 @@ func main() {
 		cfg.HotKeyMultiplier,
 		derived.Cooldown,
 	)
-	l.StartEviction(derived.EvictionInterval)
+	l.StartEviction(evictCtx, derived.EvictionInterval)
 
 	// --- Reverse proxy ---
 	transport := proxy.NewTransport(
-		cfg.MaxIdleConnsPerHost,
+		derived.MaxIdleConnsPerHost,
 		derived.DialTimeout,
 		derived.TLSTimeout,
 	)
@@ -56,10 +60,6 @@ func main() {
 
 	// --- Abuse detection engine ---
 	store := engine.NewStore()
-
-	// Use a context tied to process lifetime for the eviction goroutine.
-	evictCtx, evictCancel := context.WithCancel(context.Background())
-	defer evictCancel()
 	store.StartEviction(evictCtx, derived.EvictionInterval)
 
 	// SecurityEvent logger writes JSON lines to stdout.
@@ -69,36 +69,42 @@ func main() {
 	var killSwitch atomic.Bool
 	killSwitch.Store(cfg.KillSwitch)
 
+	shadowMode := *cfg.ShadowMode
+
 	// --- Build inner handler: existing L0 rate limiter → reverse proxy ---
 	innerHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		now := time.Now().UnixNano()
 		clientIP := proxy.ExtractClientIP(r)
 
-		ipDecision := l.CheckIP(clientIP, now)
-		if !ipDecision.Allowed {
-			metrics.BlockedTotal.Add(1)
-			switch ipDecision.Reason {
-			case "cooldown":
-				metrics.BlockedByCooldown.Add(1)
-			case "ip":
-				metrics.BlockedByIP.Add(1)
-			}
-			proxy.WriteRateLimitResponse(w, ipDecision.RetryAfterMs)
-			return
-		}
-
-		if apiKey := r.Header.Get("X-API-Key"); apiKey != "" {
-			keyDecision := l.CheckKey(apiKey, now)
-			if !keyDecision.Allowed {
+		// In shadow mode the L0 limiter is also bypassed: nothing blocks,
+		// requests are always forwarded so the user can observe signal quality safely.
+		if !shadowMode {
+			ipDecision := l.CheckIP(clientIP, now)
+			if !ipDecision.Allowed {
 				metrics.BlockedTotal.Add(1)
-				switch keyDecision.Reason {
+				switch ipDecision.Reason {
 				case "cooldown":
 					metrics.BlockedByCooldown.Add(1)
-				case "api_key":
-					metrics.BlockedByAPIKey.Add(1)
+				case "ip":
+					metrics.BlockedByIP.Add(1)
 				}
-				proxy.WriteRateLimitResponse(w, keyDecision.RetryAfterMs)
+				proxy.WriteRateLimitResponse(w, ipDecision.RetryAfterMs)
 				return
+			}
+
+			if apiKey := r.Header.Get("X-API-Key"); apiKey != "" {
+				keyDecision := l.CheckKey(apiKey, now)
+				if !keyDecision.Allowed {
+					metrics.BlockedTotal.Add(1)
+					switch keyDecision.Reason {
+					case "cooldown":
+						metrics.BlockedByCooldown.Add(1)
+					case "api_key":
+						metrics.BlockedByAPIKey.Add(1)
+					}
+					proxy.WriteRateLimitResponse(w, keyDecision.RetryAfterMs)
+					return
+				}
 			}
 		}
 
@@ -123,6 +129,8 @@ func main() {
 			BurstWindowNs:     derived.EntityBurstWindow.Nanoseconds(),
 			ShadowMode:        *cfg.ShadowMode,
 			BlockOnSuspicious: cfg.BlockOnSuspicious,
+			FunnelGate:        cfg.FunnelGate,
+			FunnelTarget:      cfg.FunnelTarget,
 		},
 		&killSwitch,
 	)
@@ -163,9 +171,21 @@ func main() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
 
+	modeLabel := "ENFORCE (blocks active)"
+	if *cfg.ShadowMode {
+		modeLabel = "SHADOW  (detection only — nothing is blocked)"
+	}
+	log.Println("-----------------------------------------------------------")
+	log.Printf("AbuseShield  %s  →  %s", cfg.ListenAddr, cfg.UpstreamURL)
+	log.Printf("mode:         %s", modeLabel)
+	log.Printf("L1:           entity %.1f req/s  burst=%.0f  window=%.1fs",
+		cfg.EntityRatePerSec, cfg.EntityBurst, cfg.EntityBurstWindowSec)
+	log.Printf("L2:           %s → %s  block_on_suspicious=%v",
+		cfg.FunnelGate, cfg.FunnelTarget, cfg.BlockOnSuspicious)
+	log.Printf("kill switch:  %v", cfg.KillSwitch)
+	log.Println("-----------------------------------------------------------")
+
 	go func() {
-		log.Printf("AbuseShield listening on %s → %s (shadow_mode=%v, kill_switch=%v)",
-			cfg.ListenAddr, cfg.UpstreamURL, *cfg.ShadowMode, cfg.KillSwitch)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("server: %v", err)
 		}

@@ -9,17 +9,20 @@ import (
 	"time"
 
 	"github.com/adva-mo/abuseShield/internal/engine"
+	"github.com/adva-mo/abuseShield/internal/metrics"
 	"github.com/adva-mo/abuseShield/internal/proxy"
 )
 
 // InterceptorConfig carries the engine parameters needed by the Interceptor.
 // Populated from config.Config by main.go.
 type InterceptorConfig struct {
-	RatePerSec         float64
-	Burst              float64
-	BurstWindowNs      int64
-	ShadowMode         bool
-	BlockOnSuspicious  bool // if true, SUSPICIOUS decisions also block (non-shadow mode only)
+	RatePerSec        float64
+	Burst             float64
+	BurstWindowNs     int64
+	ShadowMode        bool
+	BlockOnSuspicious bool // if true, SUSPICIOUS decisions also block (non-shadow mode only)
+	FunnelGate        string // expected first step in the signup funnel (e.g. "/home")
+	FunnelTarget      string // protected endpoint that requires the gate (e.g. "/register")
 }
 
 // Interceptor wraps an inner http.Handler (the reverse proxy + existing rate
@@ -94,15 +97,30 @@ func (i *Interceptor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if path == "" {
 		path = "/"
 	}
-	l2 := engine.CheckL2(i.store, entityKey, path, now)
+	l2 := engine.CheckL2(i.store, entityKey, path, i.cfg.FunnelGate, i.cfg.FunnelTarget, now)
 
 	// 6. Collect all fired signals and derive the primary decision.
 	decision, reason, confidence, signals := mergeDecisions(l1, l2)
 
-	// 7. Build the SecurityEvent. Blocked is set after we know enforcement outcome.
+	// 7. Resolve enforcement outcome.
 	ip24 := ip24CIDR(clientIP)
 	shouldBlock := decision == "BLOCK" || (decision == "SUSPICIOUS" && i.cfg.BlockOnSuspicious)
 	blocked := !i.cfg.ShadowMode && shouldBlock
+
+	// Detection counters fire regardless of shadow mode so operators can observe
+	// signal quality. BlockedTotal only increments when a request is actually rejected.
+	if !l1.Allowed && l1.Reason == "burst_detected" {
+		metrics.DetectedByBurst.Add(1)
+	}
+	if !l1.Allowed && l1.Reason == "rate_limited" {
+		metrics.DetectedByRateLimit.Add(1)
+	}
+	if l2.Suspicious && l2.Reason == "sequence_violation" {
+		metrics.DetectedSeq.Add(1)
+	}
+	if blocked {
+		metrics.BlockedTotal.Add(1)
+	}
 
 	i.logger.Emit(engine.SecurityEvent{
 		Timestamp:  time.Unix(0, now).UTC().Format(time.RFC3339Nano),
@@ -118,6 +136,10 @@ func (i *Interceptor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ShadowMode: i.cfg.ShadowMode,
 		Blocked:    blocked,
 	})
+
+	// Always attach the engine decision so clients (and test scripts) can read
+	// what the engine would do even when shadow mode is forwarding the request.
+	w.Header().Set("X-AbuseShield-Decision", decision)
 
 	if blocked {
 		w.Header().Set("Content-Type", "application/json")
@@ -161,7 +183,7 @@ func mergeDecisions(l1 engine.L1Result, l2 engine.L2Result) (decision, reason st
 	if l2.Suspicious {
 		return "SUSPICIOUS", l2.Reason, l2.Confidence, signals
 	}
-	return "ALLOW", "", 1.0, nil
+	return "ALLOW", "", 1.0, []engine.Signal{}
 }
 
 // ip24CIDR converts "192.168.1.100" to "192.168.1.0/24" for log readability.
