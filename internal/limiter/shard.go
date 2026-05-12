@@ -143,12 +143,15 @@ func allow(shards *[numShards]shard, key string, rate, burst, hotMul float64, co
 
 // evictExpired removes stale buckets from a single shard.
 // A bucket is stale if it was last used more than staleness nanoseconds ago
-// and is not currently blocked.
+// and is not in an active cooldown (blocked with a future blockUntil).
+// Buckets whose cooldown has already expired are eligible for eviction even
+// if blocked=true — they will never be unblocked by a new request that never
+// comes, and would otherwise leak memory indefinitely.
 func evictShard(sh *shard, now, stalenessNs int64) {
 	sh.mu.Lock()
 	var removed int64
 	for k, b := range sh.keys {
-		if !b.blocked && now-b.lastRefill > stalenessNs {
+		if (!b.blocked || now >= b.blockUntil) && now-b.lastRefill > stalenessNs {
 			delete(sh.keys, k)
 			removed++
 		}
