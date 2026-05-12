@@ -26,8 +26,7 @@ type entityState struct {
 	// it persists until the entity is evicted (5 minutes of inactivity).
 	// This is intentional: L2 catches clients that skip the funnel entirely.
 	// Clients that do visit the gate but then spam the target are caught by L1.
-	seenGate   bool
-	seenTarget bool
+	seenGate bool
 
 	// eviction
 	lastSeen int64 // UnixNano — updated on every access
