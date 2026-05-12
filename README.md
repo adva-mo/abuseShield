@@ -120,14 +120,24 @@ Copy `config.example.json` to `config.json`. All fields have safe defaults.
 | `block_on_suspicious` | `false` | Also block SUSPICIOUS decisions (not just BLOCK) |
 | `kill_switch` | `false` | Start with kill-switch active |
 | `kill_switch_secret` | — | Secret for `POST /admin/kill-switch` |
-| `entity_rate_per_sec` | `2.5` | L1 token refill rate per entity |
+| `entity_rate_per_sec` | `2.5` | L1 token refill rate per entity (tokens/sec) |
 | `entity_burst` | `5` | L1 max burst tokens per entity |
 | `entity_burst_window_sec` | `2.0` | Window for burst detection (seconds) |
-| `ip_rate_per_sec` | `10` | L0 token refill rate per IP |
+| `ip_rate_per_sec` | `10` | L0 token refill rate per IP (tokens/sec) |
 | `ip_burst` | `20` | L0 max burst per IP |
+| `key_rate_per_sec` | `100` | L0 token refill rate per API key (tokens/sec) |
+| `key_burst` | `200` | L0 max burst per API key |
+| `hot_key_multiplier` | `3.0` | L0 hot-key threshold: cooldown when rate > multiplier × rate_per_sec |
+| `cooldown_seconds` | `60` | L0 cooldown duration after a hot-key is detected |
 | `event_buffer_size` | `1000` | Async SecurityEvent log buffer depth |
 | `funnel_gate` | `"/home"` | L2: path the user must visit first |
 | `funnel_target` | `"/register"` | L2: protected path — triggers `sequence_violation` if gate was not seen |
+| `eviction_interval_seconds` | `60` | How often stale entity and limiter state is evicted |
+| `max_idle_conns_per_host` | `256` | HTTP transport: max idle connections to upstream |
+| `dial_timeout_seconds` | `5` | HTTP transport: TCP dial timeout |
+| `tls_handshake_timeout_seconds` | `10` | HTTP transport: TLS handshake timeout |
+| `read_header_timeout_seconds` | `5` | HTTP server: max time to read request headers |
+| `write_timeout_seconds` | `60` | HTTP server: max time to write a response |
 
 ---
 
