@@ -21,13 +21,6 @@ type Config struct {
 	HotKeyMultiplier float64 `json:"hot_key_multiplier"`
 	CooldownSeconds  float64 `json:"cooldown_seconds"`
 
-	EvictionIntervalSeconds         float64 `json:"eviction_interval_seconds"`
-	MaxIdleConnsPerHost             int     `json:"max_idle_conns_per_host"`
-	DialTimeoutSeconds              float64 `json:"dial_timeout_seconds"`
-	TLSHandshakeTimeoutSeconds      float64 `json:"tls_handshake_timeout_seconds"`
-	ReadHeaderTimeoutSeconds        float64 `json:"read_header_timeout_seconds"`
-	WriteTimeoutSeconds             float64 `json:"write_timeout_seconds"`
-
 	// Abuse detection engine settings.
 	// ShadowMode uses *bool so the JSON zero-value (false) is distinguishable
 	// from "not set", allowing the default to be true.
@@ -52,15 +45,17 @@ type Config struct {
 	FunnelTarget string `json:"funnel_target"`
 }
 
-// Derived durations (populated by Load).
+// Derived holds computed values derived from Config. Infrastructure values
+// that are not user-tunable are hardcoded here.
 type Derived struct {
-	Cooldown         time.Duration
-	EvictionInterval time.Duration
-	DialTimeout      time.Duration
-	TLSTimeout       time.Duration
-	ReadHeaderTimeout time.Duration
-	WriteTimeout     time.Duration
-	EntityBurstWindow time.Duration
+	Cooldown            time.Duration
+	EvictionInterval    time.Duration
+	DialTimeout         time.Duration
+	TLSTimeout          time.Duration
+	ReadHeaderTimeout   time.Duration
+	WriteTimeout        time.Duration
+	EntityBurstWindow   time.Duration
+	MaxIdleConnsPerHost int
 }
 
 func Load(path string) (*Config, *Derived, error) {
@@ -102,25 +97,6 @@ func Load(path string) (*Config, *Derived, error) {
 	if cfg.CooldownSeconds <= 0 {
 		cfg.CooldownSeconds = 60
 	}
-	if cfg.EvictionIntervalSeconds <= 0 {
-		cfg.EvictionIntervalSeconds = 60
-	}
-	if cfg.MaxIdleConnsPerHost <= 0 {
-		cfg.MaxIdleConnsPerHost = 256
-	}
-	if cfg.DialTimeoutSeconds <= 0 {
-		cfg.DialTimeoutSeconds = 5
-	}
-	if cfg.TLSHandshakeTimeoutSeconds <= 0 {
-		cfg.TLSHandshakeTimeoutSeconds = 10
-	}
-	if cfg.ReadHeaderTimeoutSeconds <= 0 {
-		cfg.ReadHeaderTimeoutSeconds = 5
-	}
-	if cfg.WriteTimeoutSeconds <= 0 {
-		cfg.WriteTimeoutSeconds = 60
-	}
-
 	// Abuse detection defaults.
 	if cfg.ShadowMode == nil {
 		t := true
@@ -152,13 +128,14 @@ func Load(path string) (*Config, *Derived, error) {
 	}
 
 	d := &Derived{
-		Cooldown:          time.Duration(cfg.CooldownSeconds * float64(time.Second)),
-		EvictionInterval:  time.Duration(cfg.EvictionIntervalSeconds * float64(time.Second)),
-		DialTimeout:       time.Duration(cfg.DialTimeoutSeconds * float64(time.Second)),
-		TLSTimeout:        time.Duration(cfg.TLSHandshakeTimeoutSeconds * float64(time.Second)),
-		ReadHeaderTimeout: time.Duration(cfg.ReadHeaderTimeoutSeconds * float64(time.Second)),
-		WriteTimeout:      time.Duration(cfg.WriteTimeoutSeconds * float64(time.Second)),
-		EntityBurstWindow: time.Duration(cfg.EntityBurstWindowSec * float64(time.Second)),
+		Cooldown:            time.Duration(cfg.CooldownSeconds * float64(time.Second)),
+		EvictionInterval:    60 * time.Second,
+		DialTimeout:         5 * time.Second,
+		TLSTimeout:          10 * time.Second,
+		ReadHeaderTimeout:   5 * time.Second,
+		WriteTimeout:        60 * time.Second,
+		EntityBurstWindow:   time.Duration(cfg.EntityBurstWindowSec * float64(time.Second)),
+		MaxIdleConnsPerHost: 256,
 	}
 
 	return &cfg, d, nil
