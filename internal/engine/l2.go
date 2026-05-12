@@ -33,7 +33,6 @@ func CheckL2(s *Store, entityKey, path, gate, target string, now int64) L2Result
 			st.seenGate = true
 		}
 	case target:
-		st.seenTarget = true
 		if !st.seenGate {
 			result = L2Result{
 				Suspicious: true,
