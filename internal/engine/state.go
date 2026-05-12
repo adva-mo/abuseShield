@@ -24,7 +24,6 @@ type entityState struct {
 	// L2: sequence tracking
 	seenGate   bool
 	seenTarget bool
-	gateTime   int64 // UnixNano of first gate-path visit
 
 	// eviction
 	lastSeen int64 // UnixNano — updated on every access
